@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
-import { supabase } from "@/lib/supabase-client";
-import { AnalyticsApp, type Department, type ImportedRow, type Profile, type Upload } from "@/components/analytics-app-v2";
+import { createSignupClient, supabase } from "@/lib/supabase-client";
+import { AnalyticsApp, type Department, type ImportedRow, type NewUserInput, type Profile, type Upload } from "@/components/analytics-app-v2";
 
 type HubProfile = {
   id:string; full_name:string; email:string; department:string|null; role:string;
@@ -62,12 +62,35 @@ export function AuthShell(){
   if(!profile)return <LoadingScreen/>;
   const currentProfile=profile;
   async function updateAccess(updated:Profile){
+    const hubRole=updated.role==="Administrador"?"administrador":updated.role==="Gerente"?"supervisor":"colaborador";
     const analyticsRole=updated.role==="Administrador"?"admin":updated.role==="Gerente"?"manager":updated.role==="Operador"?"uploader":"analyst";
     const {error}=await supabase.rpc("admin_set_user_access",{
-      target_user_id:updated.id,target_department:updated.department,target_analytics_enabled:updated.active,
+      target_user_id:updated.id,target_department:updated.department,target_hub_role:hubRole,
+      target_status:updated.active?"activo":"inactivo",target_analytics_enabled:updated.active,
       target_analytics_role:analyticsRole,
     });
-    return error?.message||null;
+    return error?friendlySupabaseError(error.message):null;
+  }
+  async function inviteUser(input:NewUserInput){
+    const preflight=await updateAccess({
+      id:"00000000-0000-0000-0000-000000000000",name:"Verificación",email:"",department:input.department,
+      role:input.role,initials:"",active:false,
+    });
+    if(preflight)return {error:preflight};
+    const signup=createSignupClient();
+    const {data,error}=await signup.auth.signUp({
+      email:input.email.trim().toLowerCase(),password:input.password,
+      options:{data:{full_name:input.name.trim()},emailRedirectTo:window.location.origin},
+    });
+    if(error)return {error:friendlySupabaseError(error.message)};
+    if(!data.user)return {error:"Supabase no devolvió el usuario creado."};
+    const invited:Profile={
+      id:data.user.id,name:input.name.trim(),email:input.email.trim().toLowerCase(),department:input.department,
+      role:input.role,initials:input.name.trim().split(/\s+/).map(part=>part[0]).slice(0,2).join("").toUpperCase(),active:true,
+    };
+    const accessError=await updateAccess(invited);
+    if(accessError)return {error:`La cuenta fue creada, pero falta asignar sus permisos: ${accessError}`};
+    return {profile:invited};
   }
   async function updateOwnProfile(name:string){
     const {error}=await supabase.from("profiles").update({full_name:name}).eq("id",currentProfile.id);
@@ -90,7 +113,16 @@ export function AuthShell(){
     }
     return null;
   }
-  return <AnalyticsApp initialProfile={profile} initialProfiles={profiles} onSignOut={()=>void supabase.auth.signOut()} onUpdateAccess={updateAccess} onUpdateProfile={updateOwnProfile} onImportData={importData}/>;
+  return <AnalyticsApp initialProfile={profile} initialProfiles={profiles} onSignOut={()=>void supabase.auth.signOut()} onUpdateAccess={updateAccess} onInviteUser={inviteUser} onUpdateProfile={updateOwnProfile} onImportData={importData}/>;
+}
+
+function friendlySupabaseError(message:string){
+  const normalized=message.toLowerCase();
+  if(normalized.includes("admin_set_user_access")||normalized.includes("schema cache"))return "La configuración administrativa todavía no está instalada en Supabase. El propietario debe ejecutar el script cc-analytics-integration.sql una sola vez.";
+  if(normalized.includes("user already registered")||normalized.includes("already been registered"))return "Ese correo ya tiene una cuenta en Supabase.";
+  if(normalized.includes("password"))return "La contraseña debe tener al menos 8 caracteres.";
+  if(normalized.includes("email rate limit"))return "Supabase alcanzó temporalmente el límite de correos. Intenta nuevamente en unos minutos.";
+  return message;
 }
 
 async function loadCurrentProfile(id:string){
