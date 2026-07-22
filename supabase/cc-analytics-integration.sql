@@ -25,7 +25,10 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.profiles
-    where id = auth.uid() and role = 'administrador' and status = 'activo'
+    where id = auth.uid()
+      and (role = 'administrador' or analytics_role = 'admin')
+      and status = 'activo'
+      and analytics_enabled = true
   );
 $$;
 
@@ -36,7 +39,8 @@ stable
 security definer
 set search_path = public
 as $$
-  select department from public.profiles where id = auth.uid() and status = 'activo';
+  select department from public.profiles
+  where id = auth.uid() and status = 'activo' and analytics_enabled = true;
 $$;
 
 revoke all on function public.current_user_is_admin() from public;
@@ -63,38 +67,12 @@ revoke update on public.profiles from authenticated;
 grant update (full_name, avatar_url) on public.profiles to authenticated;
 grant select on public.profiles to authenticated;
 
--- Alta automática de perfil para nuevos usuarios de CC HUB.
-create or replace function public.handle_new_hub_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.profiles (id, full_name, email, role, status)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data ->> 'full_name', ''),
-    coalesce(new.email, ''),
-    'colaborador',
-    'inactivo'
-  )
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created_cc_hub on auth.users;
-create trigger on_auth_user_created_cc_hub
-after insert on auth.users
-for each row execute function public.handle_new_hub_user();
-
 -- Operación administrativa segura para accesos y perfiles.
+drop function if exists public.admin_set_user_access(uuid,text,text,text,boolean,text);
+
 create or replace function public.admin_set_user_access(
   target_user_id uuid,
   target_department text,
-  target_role text,
-  target_status text,
   target_analytics_enabled boolean,
   target_analytics_role text
 )
@@ -107,19 +85,16 @@ begin
   if not public.current_user_is_admin() then
     raise exception 'Acceso denegado';
   end if;
-  if target_role not in ('administrador','supervisor','colaborador') then
-    raise exception 'Rol inválido';
-  end if;
-  if target_status not in ('activo','inactivo','suspendido') then
-    raise exception 'Estado inválido';
-  end if;
   if target_analytics_role not in ('admin','manager','analyst','uploader','viewer') then
     raise exception 'Rol de Analytics inválido';
   end if;
+  if target_analytics_enabled and not exists (
+    select 1 from public.profiles where id = target_user_id and status = 'activo'
+  ) then
+    raise exception 'El usuario debe estar activo en CC HUB';
+  end if;
   update public.profiles
   set department = target_department,
-      role = target_role,
-      status = target_status,
       analytics_enabled = target_analytics_enabled,
       analytics_role = target_analytics_role,
       updated_at = now()
@@ -127,8 +102,8 @@ begin
 end;
 $$;
 
-revoke all on function public.admin_set_user_access(uuid,text,text,text,boolean,text) from public;
-grant execute on function public.admin_set_user_access(uuid,text,text,text,boolean,text) to authenticated;
+revoke all on function public.admin_set_user_access(uuid,text,boolean,text) from public;
+grant execute on function public.admin_set_user_access(uuid,text,boolean,text) to authenticated;
 
 -- Registro y datos flexibles importados por departamento.
 create table if not exists public.analytics_imports (
