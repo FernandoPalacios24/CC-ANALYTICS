@@ -1,9 +1,10 @@
 -- CC HUB + CC ANALYTICS · integración de identidad y permisos
--- Ejecutar una sola vez en Supabase SQL Editor con una cuenta propietaria.
+-- Ejecutar en Supabase SQL Editor con una cuenta propietaria; es idempotente.
 
 alter table public.profiles
   add column if not exists analytics_enabled boolean not null default false,
-  add column if not exists analytics_role text not null default 'viewer';
+  add column if not exists analytics_role text not null default 'viewer',
+  add column if not exists zone text not null default 'Sin asignar';
 
 do $$ begin
   alter table public.profiles add constraint profiles_analytics_role_check
@@ -43,10 +44,23 @@ as $$
   where id = auth.uid() and status = 'activo' and analytics_enabled = true;
 $$;
 
+create or replace function public.current_user_zone()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select zone from public.profiles
+  where id = auth.uid() and status = 'activo' and analytics_enabled = true;
+$$;
+
 revoke all on function public.current_user_is_admin() from public;
 revoke all on function public.current_user_department() from public;
+revoke all on function public.current_user_zone() from public;
 grant execute on function public.current_user_is_admin() to authenticated;
 grant execute on function public.current_user_department() to authenticated;
+grant execute on function public.current_user_zone() to authenticated;
 
 -- Sustituye las políticas permisivas originales de profiles.
 drop policy if exists "profiles readable authenticated" on public.profiles;
@@ -76,11 +90,14 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, full_name, email, role, status)
+  insert into public.profiles (id, full_name, email, department, job_title, zone, role, status)
   values (
     new.id,
     coalesce(new.raw_user_meta_data ->> 'full_name', ''),
     coalesce(new.email, ''),
+    nullif(new.raw_user_meta_data ->> 'department', ''),
+    nullif(new.raw_user_meta_data ->> 'job_title', ''),
+    coalesce(nullif(new.raw_user_meta_data ->> 'zone', ''), 'Sin asignar'),
     'colaborador',
     'inactivo'
   )
@@ -97,10 +114,13 @@ for each row execute function public.handle_new_cc_platform_user();
 -- Operación administrativa segura para accesos y perfiles.
 drop function if exists public.admin_set_user_access(uuid,text,text,text,boolean,text);
 drop function if exists public.admin_set_user_access(uuid,text,boolean,text);
+drop function if exists public.admin_set_user_access(uuid,text,text,text,text,text,boolean,text);
 
 create or replace function public.admin_set_user_access(
   target_user_id uuid,
   target_department text,
+  target_job_title text,
+  target_zone text,
   target_hub_role text,
   target_status text,
   target_analytics_enabled boolean,
@@ -124,8 +144,16 @@ begin
   if target_analytics_role not in ('admin','manager','analyst','uploader','viewer') then
     raise exception 'Rol de Analytics inválido';
   end if;
+  if nullif(trim(target_job_title), '') is null then
+    raise exception 'Cargo o perfil requerido';
+  end if;
+  if nullif(trim(target_zone), '') is null then
+    raise exception 'Zona requerida';
+  end if;
   update public.profiles
   set department = target_department,
+      job_title = trim(target_job_title),
+      zone = trim(target_zone),
       role = target_hub_role,
       status = target_status,
       analytics_enabled = target_analytics_enabled,
@@ -135,14 +163,15 @@ begin
 end;
 $$;
 
-revoke all on function public.admin_set_user_access(uuid,text,text,text,boolean,text) from public;
-grant execute on function public.admin_set_user_access(uuid,text,text,text,boolean,text) to authenticated;
+revoke all on function public.admin_set_user_access(uuid,text,text,text,text,text,boolean,text) from public;
+grant execute on function public.admin_set_user_access(uuid,text,text,text,text,text,boolean,text) to authenticated;
 
 -- Registro y datos flexibles importados por departamento.
 create table if not exists public.analytics_imports (
   id uuid primary key default gen_random_uuid(),
   file_name text not null,
   department text not null,
+  zone text not null default 'Sin asignar',
   module text not null default 'general',
   row_count integer not null default 0,
   uploaded_by uuid not null references public.profiles(id),
@@ -153,12 +182,18 @@ create table if not exists public.analytics_records (
   id bigint generated always as identity primary key,
   import_id uuid not null references public.analytics_imports(id) on delete cascade,
   department text not null,
+  zone text not null default 'Sin asignar',
   module text not null default 'general',
   period text,
   payload jsonb not null,
   created_by uuid not null references public.profiles(id),
   created_at timestamptz not null default now()
 );
+
+alter table public.analytics_imports
+  add column if not exists zone text not null default 'Sin asignar';
+alter table public.analytics_records
+  add column if not exists zone text not null default 'Sin asignar';
 
 alter table public.analytics_imports enable row level security;
 alter table public.analytics_records enable row level security;
@@ -170,25 +205,51 @@ drop policy if exists "analytics records scoped insert" on public.analytics_reco
 
 create policy "analytics imports scoped select" on public.analytics_imports
 for select to authenticated
-using (public.current_user_is_admin() or department = public.current_user_department());
+using (
+  public.current_user_is_admin() or
+  (
+    department = public.current_user_department() and
+    (public.current_user_zone() = 'Nacional' or zone = public.current_user_zone())
+  )
+);
 
 create policy "analytics imports scoped insert" on public.analytics_imports
 for insert to authenticated
 with check (
   uploaded_by = auth.uid() and
-  (public.current_user_is_admin() or department = public.current_user_department())
+  (
+    public.current_user_is_admin() or
+    (
+      department = public.current_user_department() and
+      (public.current_user_zone() = 'Nacional' or zone = public.current_user_zone())
+    )
+  )
 );
 
 create policy "analytics records scoped select" on public.analytics_records
 for select to authenticated
-using (public.current_user_is_admin() or department = public.current_user_department());
+using (
+  public.current_user_is_admin() or
+  (
+    department = public.current_user_department() and
+    (public.current_user_zone() = 'Nacional' or zone = public.current_user_zone())
+  )
+);
 
 create policy "analytics records scoped insert" on public.analytics_records
 for insert to authenticated
 with check (
   created_by = auth.uid() and
-  (public.current_user_is_admin() or department = public.current_user_department())
+  (
+    public.current_user_is_admin() or
+    (
+      department = public.current_user_department() and
+      (public.current_user_zone() = 'Nacional' or zone = public.current_user_zone())
+    )
+  )
 );
 
 grant select, insert on public.analytics_imports to authenticated;
 grant select, insert on public.analytics_records to authenticated;
+
+notify pgrst, 'reload schema';
