@@ -62,11 +62,9 @@ export function AuthShell(){
   if(!profile)return <LoadingScreen/>;
   const currentProfile=profile;
   async function updateAccess(updated:Profile){
-    const hubRole=updated.role==="Administrador"?"administrador":updated.role==="Gerente"?"supervisor":"colaborador";
     const analyticsRole=updated.role==="Administrador"?"admin":updated.role==="Gerente"?"manager":updated.role==="Operador"?"uploader":"analyst";
     const {error}=await supabase.rpc("admin_set_user_access",{
-      target_user_id:updated.id,target_department:updated.department,target_role:hubRole,
-      target_status:updated.active?"activo":"inactivo",target_analytics_enabled:updated.active,
+      target_user_id:updated.id,target_department:updated.department,target_analytics_enabled:updated.active,
       target_analytics_role:analyticsRole,
     });
     return error?.message||null;
@@ -103,7 +101,7 @@ async function loadCurrentProfile(id:string){
 }
 
 function mapProfile(row:HubProfile):Profile{
-  const role=row.role==="administrador"?"Administrador":row.role==="supervisor"?"Gerente":"Analista";
+  const role=row.analytics_role==="admin"?"Administrador":row.analytics_role==="manager"?"Gerente":row.analytics_role==="uploader"?"Operador":row.analytics_role?"Analista":row.role==="administrador"?"Administrador":row.role==="supervisor"?"Gerente":"Analista";
   const department=normalizeDepartment(row.department,role);
   const name=row.full_name?.trim()||row.email;
   const initials=name.split(/\s+/).map(x=>x[0]).slice(0,2).join("").toUpperCase();
