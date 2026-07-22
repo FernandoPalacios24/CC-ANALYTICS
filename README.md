@@ -42,7 +42,8 @@ La migración agrega los campos de acceso a Analytics, las tablas de importació
 
 ## Seguridad
 
-- Las cuentas se crean y administran desde CC HUB/Supabase Auth.
+- Los administradores pueden crear e invitar cuentas compartidas desde CC ANALYTICS.
+- El alta crea el usuario en Supabase Auth y el mismo perfil habilita CC HUB y CC ANALYTICS.
 - El navegador usa únicamente la clave pública de Supabase.
 - RLS impide que un usuario consulte o cargue datos de otro departamento.
 - Los cambios de rol y estado pasan por una función `security definer` que valida al administrador.
