@@ -1,3 +1,5 @@
-import { AnalyticsApp } from "@/components/analytics-app-v2";
+import { AuthShell } from "@/components/auth-shell";
 
-export default function Home() { return <AnalyticsApp />; }
+export default function Home() {
+  return <AuthShell />;
+}
