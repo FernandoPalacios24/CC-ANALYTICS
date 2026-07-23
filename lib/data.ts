@@ -34,3 +34,4 @@ export const modules = [
   "Call center", "Recursos humanos", "Finanzas", "Operaciones", "Instalaciones", "Soporte técnico", "Inventario", "Cobertura",
   "Clientes", "Reportes", "Importación Excel y CSV", "Administración", "Usuarios y permisos", "Centro de alertas", "Proyecciones",
 ];
+
