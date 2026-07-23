@@ -20,5 +20,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: chmod +x scripts/*.sh
       - run: npm run lint
       - run: npm test
