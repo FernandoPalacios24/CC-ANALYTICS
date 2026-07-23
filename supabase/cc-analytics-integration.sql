@@ -365,4 +365,80 @@ grant select, insert on public.analytics_imports to authenticated;
 grant select, insert on public.analytics_records to authenticated;
 grant select, insert on public.analytics_sales to authenticated;
 
+-- Plantillas del laboratorio de reportes. La definición JSON conserva todas
+-- las combinaciones de campos, métricas, filtros y visualizaciones.
+create table if not exists public.analytics_report_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  description text,
+  department text not null,
+  zone text not null default 'Nacional',
+  definition jsonb not null,
+  is_shared boolean not null default false,
+  created_by uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists analytics_report_templates_owner_idx
+  on public.analytics_report_templates (created_by, updated_at desc);
+
+alter table public.analytics_report_templates enable row level security;
+
+drop policy if exists "analytics report templates scoped select"
+  on public.analytics_report_templates;
+drop policy if exists "analytics report templates scoped insert"
+  on public.analytics_report_templates;
+drop policy if exists "analytics report templates scoped update"
+  on public.analytics_report_templates;
+drop policy if exists "analytics report templates scoped delete"
+  on public.analytics_report_templates;
+
+create policy "analytics report templates scoped select"
+on public.analytics_report_templates
+for select to authenticated
+using (
+  public.current_user_is_admin()
+  or created_by = auth.uid()
+  or (
+    is_shared
+    and department = public.current_user_department()
+    and (
+      public.current_user_zone() = 'Nacional'
+      or zone = public.current_user_zone()
+    )
+  )
+);
+
+create policy "analytics report templates scoped insert"
+on public.analytics_report_templates
+for insert to authenticated
+with check (
+  created_by = auth.uid()
+  and (
+    public.current_user_is_admin()
+    or (
+      department = public.current_user_department()
+      and (
+        public.current_user_zone() = 'Nacional'
+        or zone = public.current_user_zone()
+      )
+    )
+  )
+);
+
+create policy "analytics report templates scoped update"
+on public.analytics_report_templates
+for update to authenticated
+using (created_by = auth.uid() or public.current_user_is_admin())
+with check (created_by = auth.uid() or public.current_user_is_admin());
+
+create policy "analytics report templates scoped delete"
+on public.analytics_report_templates
+for delete to authenticated
+using (created_by = auth.uid() or public.current_user_is_admin());
+
+grant select, insert, update, delete
+on public.analytics_report_templates to authenticated;
+
 notify pgrst, 'reload schema';
