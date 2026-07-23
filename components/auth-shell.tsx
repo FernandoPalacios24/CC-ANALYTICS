@@ -42,15 +42,24 @@ export function AuthShell() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [error, setError] = useState("");
   const [recovery, setRecovery] = useState(false);
+  const [profileReload, setProfileReload] = useState(0);
 
   useEffect(() => {
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (mounted) {
-        setSession(data.session);
-        setChecking(false);
-      }
-    });
+    withTimeout(
+      supabase.auth.getSession(),
+      8_000,
+      "No se pudo comprobar la sesión.",
+    )
+      .then(({ data }) => {
+        if (mounted) {
+          setSession(data.session);
+          setChecking(false);
+        }
+      })
+      .catch(() => {
+        if (mounted) setChecking(false);
+      });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, next) => {
@@ -75,59 +84,52 @@ export function AuthShell() {
     async function load() {
       setChecking(true);
       setError("");
-      const { data, currentError } = await loadCurrentProfile(session!.user.id);
-      if (!active) return;
-      if (currentError || !data) {
-        setError(currentError || "Tu cuenta no tiene un perfil de CC HUB.");
-        setChecking(false);
-        return;
-      }
       try {
+        const { data, currentError } = await loadCurrentProfile(
+          session!.user.id,
+        );
+        if (!active) return;
+        if (currentError || !data)
+          throw new Error(
+            currentError || "Tu cuenta no tiene un perfil de CC HUB.",
+          );
         const mapped = mapProfile(data);
         if (!mapped.active)
           throw new Error(
             "Tu acceso a CC ANALYTICS está inactivo o pendiente de aprobación. Contacta al administrador.",
           );
         setProfile(mapped);
-        {
-          const { data: all } = await supabase
-            .from("profiles")
-            .select("id,full_name,email,department,role,status,job_title")
-            .order("full_name");
-          const { data: analytics } = await supabase
-            .from("profiles")
-            .select("id,analytics_enabled,analytics_role");
-          const { data: profileZones } = await supabase
-            .from("profiles")
-            .select("id,zone");
-          const { data: hierarchy } = await supabase
-            .from("profiles")
-            .select("id,reports_to");
-          const access = new Map((analytics || []).map((row) => [row.id, row]));
-          const zoneAccess = new Map(
-            (profileZones || []).map((row) => [row.id, row]),
+        setProfiles([mapped]);
+        setChecking(false);
+
+        try {
+          const { data: directory, error: directoryError } = await withTimeout(
+            supabase
+              .from("profiles")
+              .select(
+                "id,full_name,email,department,role,status,job_title,analytics_enabled,analytics_role,zone,reports_to",
+              )
+              .order("full_name"),
+            10_000,
+            "El directorio de usuarios tardó demasiado.",
           );
-          const hierarchyAccess = new Map(
-            (hierarchy || []).map((row) => [row.id, row]),
-          );
+          if (!active || directoryError) return;
           setProfiles(
-            (all || []).flatMap((row) => {
+            (directory || []).flatMap((row) => {
               try {
-                return [
-                  mapProfile({
-                    ...row,
-                    ...access.get(row.id),
-                    ...zoneAccess.get(row.id),
-                    ...hierarchyAccess.get(row.id),
-                  } as HubProfile),
-                ];
+                return [mapProfile(row as HubProfile)];
               } catch {
                 return [];
               }
             }),
           );
+        } catch {
+          // El directorio es complementario. La aplicación ya puede abrir con
+          // el perfil validado del usuario actual.
         }
       } catch (e) {
+        if (!active) return;
+        setProfile(null);
         setError(
           e instanceof Error ? e.message : "No se pudo cargar el perfil.",
         );
@@ -139,7 +141,7 @@ export function AuthShell() {
     return () => {
       active = false;
     };
-  }, [session]);
+  }, [session, profileReload]);
 
   if (checking) return <LoadingScreen />;
   if (recovery && session)
@@ -149,6 +151,11 @@ export function AuthShell() {
     return (
       <AccessError
         message={error}
+        onRetry={() => {
+          setError("");
+          setChecking(true);
+          setProfileReload((current) => current + 1);
+        }}
         onExit={() => void supabase.auth.signOut()}
       />
     );
@@ -421,40 +428,64 @@ function friendlySupabaseError(message: string) {
 }
 
 async function loadCurrentProfile(id: string) {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id,full_name,email,department,role,status,job_title")
-    .eq("id", id)
-    .single();
-  if (error || !data)
+  const detailed = await withTimeout(
+    supabase
+      .from("profiles")
+      .select(
+        "id,full_name,email,department,role,status,job_title,analytics_enabled,analytics_role,zone,reports_to",
+      )
+      .eq("id", id)
+      .single(),
+    12_000,
+    "Supabase tardó demasiado en cargar tu perfil. Revisa tu conexión e intenta nuevamente.",
+  );
+  if (!detailed.error && detailed.data)
+    return {
+      data: detailed.data as HubProfile,
+      currentError: "",
+    };
+
+  // Compatibilidad temporal si el propietario todavía no ha ejecutado la
+  // migración más reciente del Supabase compartido.
+  const base = await withTimeout(
+    supabase
+      .from("profiles")
+      .select("id,full_name,email,department,role,status,job_title")
+      .eq("id", id)
+      .single(),
+    8_000,
+    "No se pudo cargar el perfil base.",
+  );
+  if (base.error || !base.data)
     return {
       data: null,
-      currentError: error?.message || "Perfil no encontrado.",
+      currentError:
+        base.error?.message ||
+        detailed.error?.message ||
+        "Perfil no encontrado.",
     };
-  const { data: analytics } = await supabase
-    .from("profiles")
-    .select("analytics_enabled,analytics_role")
-    .eq("id", id)
-    .maybeSingle();
-  const { data: profileZone } = await supabase
-    .from("profiles")
-    .select("zone")
-    .eq("id", id)
-    .maybeSingle();
-  const { data: hierarchy } = await supabase
-    .from("profiles")
-    .select("reports_to")
-    .eq("id", id)
-    .maybeSingle();
   return {
-    data: {
-      ...data,
-      ...(analytics || {}),
-      ...(profileZone || {}),
-      ...(hierarchy || {}),
-    } as HubProfile,
+    data: base.data as HubProfile,
     currentError: "",
   };
+}
+
+async function withTimeout<T>(
+  request: PromiseLike<T>,
+  milliseconds: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(request),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function mapProfile(row: HubProfile): Profile {
@@ -765,9 +796,11 @@ function LoadingScreen() {
 }
 function AccessError({
   message,
+  onRetry,
   onExit,
 }: {
   message: string;
+  onRetry: () => void;
   onExit: () => void;
 }) {
   return (
@@ -778,12 +811,20 @@ function AccessError({
         </div>
         <h1 className="mt-5 text-xl font-black">Acceso pendiente</h1>
         <p className="mt-3 text-sm leading-6 text-zinc-400">{message}</p>
-        <button
-          onClick={onExit}
-          className="mt-6 rounded-xl border border-white/10 px-5 py-3 text-xs font-bold"
-        >
-          Cerrar sesión
-        </button>
+        <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
+          <button
+            onClick={onRetry}
+            className="rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-5 py-3 text-xs font-black"
+          >
+            Reintentar
+          </button>
+          <button
+            onClick={onExit}
+            className="rounded-xl border border-white/10 px-5 py-3 text-xs font-bold"
+          >
+            Cerrar sesión
+          </button>
+        </div>
       </div>
     </main>
   );
