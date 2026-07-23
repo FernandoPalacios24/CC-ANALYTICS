@@ -66,9 +66,9 @@ import {
 } from "recharts";
 import { citySales, monthly, salesTrend, sellers } from "@/lib/data";
 import {
-  ReportStudio,
   SalesOrganizationDashboard,
 } from "@/components/sales-intelligence";
+import { ReportLab } from "@/components/report-lab";
 
 export type Department =
   | "Administración"
@@ -2773,7 +2773,7 @@ export function AnalyticsApp({
     if (active === "Finanzas") return <FinanceDashboard />;
     if (active === "Operaciones") return <OperationsDashboard />;
     if (active === "Reportes")
-      return <ReportStudio profile={profile} profiles={profiles} />;
+      return <ReportLab profile={profile} profiles={profiles} />;
     if (active === "Importar datos")
       return (
         <PersistentImportDashboard
