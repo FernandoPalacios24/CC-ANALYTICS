@@ -122,6 +122,41 @@ type DataPoint = {
   value: number;
 };
 
+const REPORT_PAGE_SIZE = 1_000;
+const REPORT_ROW_LIMIT = 20_000;
+
+async function loadReportRows(
+  table: "analytics_sales" | "analytics_records",
+  fields: string,
+  orderField: string,
+) {
+  const rows: GenericRow[] = [];
+  let error = "";
+  for (
+    let from = 0;
+    from < REPORT_ROW_LIMIT;
+    from += REPORT_PAGE_SIZE
+  ) {
+    const result = await supabase
+      .from(table)
+      .select(fields)
+      .order(orderField, { ascending: true })
+      .range(from, from + REPORT_PAGE_SIZE - 1);
+    if (result.error) {
+      error = result.error.message;
+      break;
+    }
+    const page = (result.data as unknown as GenericRow[] | null) || [];
+    rows.push(...page);
+    if (page.length < REPORT_PAGE_SIZE) break;
+  }
+  return {
+    rows,
+    error,
+    truncated: rows.length >= REPORT_ROW_LIMIT,
+  };
+}
+
 const COLORS = [
   "#a855f7",
   "#d946ef",
@@ -322,15 +357,9 @@ function salesRows(
   profiles: Profile[],
 ): GenericRow[] {
   const profileMap = new Map(profiles.map((item) => [item.id, item]));
-  const managerMap = new Map(
-    profiles.map((item) => [
-      item.id,
-      item.managerId ? profileMap.get(item.managerId)?.name : null,
-    ]),
-  );
   return rows.map((row) => {
     const date = String(row.sale_date ?? "");
-    const sellerId = String(row.seller_profile_id ?? "");
+    const supervisorId = String(row.supervisor_profile_id ?? "");
     return {
       Mes: date.slice(0, 7),
       Fecha: date,
@@ -339,7 +368,9 @@ function salesRows(
       Región: row.region || "Sin región",
       Ciudad: row.city || "Sin ciudad",
       Supervisor:
-        managerMap.get(sellerId) || row.team || "Sin supervisor asignado",
+        profileMap.get(supervisorId)?.name ||
+        row.team ||
+        "Sin supervisor asignado",
       Vendedor: row.seller_name || "Sin vendedor",
       Equipo: row.team || "Sin equipo",
       "Tipo de venta": row.sale_type || "Sin tipo",
@@ -751,18 +782,16 @@ export function ReportStudioV3({
     let active = true;
     async function load() {
       const [salesResult, importsResult, templatesResult] = await Promise.all([
-        supabase
-          .from("analytics_sales")
-          .select(
-            "id,department,zone,seller_profile_id,seller_name,team,sale_date,country,region,city,sale_type,service,medium,is_primary,contract_service,amount_billed,commission_income",
-          )
-          .order("sale_date", { ascending: true })
-          .limit(10_000),
-        supabase
-          .from("analytics_records")
-          .select("id,department,zone,period,payload")
-          .order("created_at", { ascending: true })
-          .limit(10_000),
+        loadReportRows(
+          "analytics_sales",
+            "id,department,zone,supervisor_profile_id,seller_name,seller_code,team,sale_date,country,region,city,sale_type,service,medium,is_primary,contract_service,amount_billed,commission_income",
+          "sale_date",
+        ),
+        loadReportRows(
+          "analytics_records",
+          "id,department,zone,period,payload",
+          "created_at",
+        ),
         supabase
           .from("analytics_report_templates")
           .select("id,name,definition")
@@ -770,9 +799,9 @@ export function ReportStudioV3({
           .limit(30),
       ]);
       if (!active) return;
-      setSales((salesResult.data as GenericRow[] | null) || []);
-      setImports((importsResult.data as GenericRow[] | null) || []);
-      if (!salesResult.data?.length && importsResult.data?.length)
+      setSales(salesResult.rows);
+      setImports(importsResult.rows);
+      if (!salesResult.rows.length && importsResult.rows.length)
         setReport((current) => ({ ...current, source: "imports" }));
       setTemplates(
         ((templatesResult.data as TemplateRow[] | null) || []).filter((item) =>
@@ -782,6 +811,10 @@ export function ReportStudioV3({
       if (salesResult.error && importsResult.error)
         setStatus(
           "Todavía no hay una fuente disponible. Importa un Excel o CSV para comenzar.",
+        );
+      else if (salesResult.truncated || importsResult.truncated)
+        setStatus(
+          `Se cargó el límite corporativo de ${REPORT_ROW_LIMIT.toLocaleString("es-HN")} filas por fuente. Aplica filtros de período antes de análisis masivos.`,
         );
       setLoading(false);
     }
@@ -1312,7 +1345,7 @@ export function ReportStudioV3({
                 ["billing", "Facturación"],
                 ["commission", "Comisiones"],
                 ["ticket", "Ticket / ARPU"],
-                ["sellers", "Vendedores activos"],
+                ["sellers", "Vendedores con ventas"],
               ]}
             />
             <ChoiceGroup
@@ -1671,7 +1704,7 @@ function quickMeasureLabel(value: string) {
       billing: "Facturación",
       commission: "Comisiones",
       ticket: "Ticket / ARPU",
-      sellers: "Vendedores activos",
+      sellers: "Vendedores con ventas",
     }[value] || "Resultado"
   );
 }
