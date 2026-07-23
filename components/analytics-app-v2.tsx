@@ -65,18 +65,28 @@ import {
   YAxis,
 } from "recharts";
 import { citySales, monthly, salesTrend, sellers } from "@/lib/data";
+import {
+  ReportStudio,
+  SalesOrganizationDashboard,
+} from "@/components/sales-intelligence";
 
 export type Department =
   | "Administración"
   | "Ventas Digitales"
   | "Ventas Residenciales"
+  | "Ventas Residenciales Rurales"
   | "Ventas Corporativas"
   | "Marketing"
   | "Call Center"
   | "Recursos Humanos"
   | "Finanzas"
   | "Operaciones";
-export type Role = "Administrador" | "Gerente" | "Analista" | "Operador";
+export type Role =
+  | "Administrador"
+  | "Líder de departamento"
+  | "Supervisor"
+  | "Analista"
+  | "Operador";
 export type Zone = string;
 export type Profile = {
   id: string;
@@ -86,6 +96,7 @@ export type Profile = {
   jobProfile: string;
   zone: Zone;
   role: Role;
+  managerId: string | null;
   initials: string;
   active: boolean;
 };
@@ -97,6 +108,7 @@ export type NewUserInput = {
   jobProfile: string;
   zone: Zone;
   role: Role;
+  managerId: string | null;
 };
 export type ImportedRow = Record<string, unknown>;
 export type Upload = {
@@ -114,6 +126,7 @@ const departments: Department[] = [
   "Administración",
   "Ventas Digitales",
   "Ventas Residenciales",
+  "Ventas Residenciales Rurales",
   "Ventas Corporativas",
   "Marketing",
   "Call Center",
@@ -125,11 +138,18 @@ const zones: Zone[] = ["Nacional", "Zona Norte", "Zona Centro", "Zona Sur"];
 const jobProfiles = [
   "Community Manager",
   "Ejecutivo de ventas",
-  "Gerente de área",
+  "Líder de departamento",
   "Supervisor",
   "Analista",
   "Operador",
   "Administrador",
+];
+const roles: Role[] = [
+  "Administrador",
+  "Líder de departamento",
+  "Supervisor",
+  "Analista",
+  "Operador",
 ];
 
 function departmentsForJobProfile(jobProfile: string) {
@@ -151,6 +171,40 @@ function jobProfilesWithCurrent(jobProfile: string) {
     : [jobProfile, ...jobProfiles];
 }
 
+function managerCandidates(
+  profiles: Profile[],
+  role: Role,
+  department: Department,
+  zone: Zone,
+  currentId?: string,
+) {
+  if (role === "Supervisor")
+    return profiles.filter(
+      (profile) =>
+        profile.id !== currentId &&
+        profile.role === "Líder de departamento" &&
+        profile.department === department &&
+        (profile.zone === zone || profile.zone === "Nacional"),
+    );
+  if (role === "Analista" || role === "Operador")
+    return profiles.filter(
+      (profile) =>
+        profile.id !== currentId &&
+        profile.role === "Supervisor" &&
+        profile.department === department &&
+        profile.zone === zone,
+    );
+  return [];
+}
+
+function defaultJobProfile(role: Role) {
+  if (role === "Líder de departamento") return "Líder de departamento";
+  if (role === "Supervisor") return "Supervisor";
+  if (role === "Operador") return "Operador";
+  if (role === "Administrador") return "Administrador";
+  return "Analista";
+}
+
 const initialProfiles: Profile[] = [
   {
     id: "demo-admin",
@@ -160,6 +214,7 @@ const initialProfiles: Profile[] = [
     jobProfile: "Administrador",
     zone: "Nacional",
     role: "Administrador",
+    managerId: null,
     initials: "FP",
     active: true,
   },
@@ -170,7 +225,8 @@ const initialProfiles: Profile[] = [
     department: "Ventas Digitales",
     jobProfile: "Community Manager",
     zone: "Zona Norte",
-    role: "Gerente",
+    role: "Líder de departamento",
+    managerId: null,
     initials: "AS",
     active: true,
   },
@@ -196,6 +252,11 @@ const moduleInfo = [
     name: "Ventas residenciales",
     icon: Building2,
     departments: ["Administración", "Ventas Residenciales"],
+  },
+  {
+    name: "Ventas residenciales rurales",
+    icon: Map,
+    departments: ["Administración", "Ventas Residenciales Rurales"],
   },
   {
     name: "Ventas corporativas",
@@ -1349,9 +1410,11 @@ function PersistentImportDashboard({
         );
       else {
         const buffer = await file.arrayBuffer();
-        const book = XLSX.read(buffer);
+        const book = XLSX.read(buffer, { cellDates: true });
+        const detailSheet = book.Sheets.Detalle;
         parsed = XLSX.utils.sheet_to_json<ImportedRow>(
-          book.Sheets[book.SheetNames[0]],
+          detailSheet || book.Sheets[book.SheetNames[0]],
+          detailSheet ? { range: 2, defval: null } : { defval: null },
         );
       }
       if (!parsed.length)
@@ -1580,6 +1643,7 @@ function UsersDashboard({
       {
         id: crypto.randomUUID(),
         ...draft,
+        managerId: null,
         initials: draft.name
           .split(" ")
           .map((x) => x[0])
@@ -1803,7 +1867,7 @@ function AccessManagementDashboard({
       </Card>
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1280px] text-left text-xs">
+          <table className="w-full min-w-[1480px] text-left text-xs">
             <thead className="border-b border-white/[.06] bg-white/[.02] text-[10px] uppercase tracking-wider text-zinc-600">
               <tr>
                 <th className="px-5 py-3">Usuario</th>
@@ -1811,6 +1875,7 @@ function AccessManagementDashboard({
                 <th>Departamento</th>
                 <th>Zona</th>
                 <th>Rol</th>
+                <th>Reporta a</th>
                 <th>Alcance</th>
                 <th>Estado</th>
                 <th className="pr-5 text-right">Acción</th>
@@ -1834,6 +1899,7 @@ function AccessManagementDashboard({
                         const available = departmentsForJobProfile(jobProfile);
                         change(row.id, {
                           jobProfile,
+                          managerId: null,
                           department: available.includes(row.department)
                             ? row.department
                             : available[0],
@@ -1853,6 +1919,7 @@ function AccessManagementDashboard({
                       onChange={(e) =>
                         change(row.id, {
                           department: e.target.value as Department,
+                          managerId: null,
                         })
                       }
                       className="rounded-lg border border-white/[.08] bg-[#111116] px-2 py-2 text-xs text-purple-300 disabled:opacity-60"
@@ -1866,7 +1933,12 @@ function AccessManagementDashboard({
                     <select
                       value={row.zone}
                       disabled={row.role === "Administrador"}
-                      onChange={(e) => change(row.id, { zone: e.target.value })}
+                      onChange={(e) =>
+                        change(row.id, {
+                          zone: e.target.value,
+                          managerId: null,
+                        })
+                      }
                       className="rounded-lg border border-white/[.08] bg-[#111116] px-2 py-2 text-xs text-purple-300 disabled:opacity-60"
                     >
                       {zonesWithCurrent(row.zone).map((value) => (
@@ -1880,6 +1952,7 @@ function AccessManagementDashboard({
                       onChange={(e) =>
                         change(row.id, {
                           role: e.target.value as Role,
+                          managerId: null,
                           department:
                             e.target.value === "Administrador"
                               ? "Administración"
@@ -1887,9 +1960,7 @@ function AccessManagementDashboard({
                           jobProfile:
                             e.target.value === "Administrador"
                               ? "Administrador"
-                              : row.jobProfile === "Administrador"
-                                ? "Analista"
-                                : row.jobProfile,
+                              : defaultJobProfile(e.target.value as Role),
                           zone:
                             e.target.value === "Administrador"
                               ? "Nacional"
@@ -1900,17 +1971,54 @@ function AccessManagementDashboard({
                       }
                       className="rounded-lg border border-white/[.08] bg-[#111116] px-2 py-2 text-xs"
                     >
-                      {["Administrador", "Gerente", "Analista", "Operador"].map(
-                        (x) => (
-                          <option key={x}>{x}</option>
-                        ),
-                      )}
+                      {roles.map((x) => <option key={x}>{x}</option>)}
                     </select>
+                  </td>
+                  <td>
+                    {managerCandidates(
+                      rows,
+                      row.role,
+                      row.department,
+                      row.zone,
+                      row.id,
+                    ).length ? (
+                      <select
+                        value={row.managerId || ""}
+                        onChange={(e) =>
+                          change(row.id, { managerId: e.target.value || null })
+                        }
+                        className="max-w-48 rounded-lg border border-white/[.08] bg-[#111116] px-2 py-2 text-xs text-cyan-300"
+                      >
+                        <option value="">Sin asignar</option>
+                        {managerCandidates(
+                          rows,
+                          row.role,
+                          row.department,
+                          row.zone,
+                          row.id,
+                        ).map((manager) => (
+                          <option key={manager.id} value={manager.id}>
+                            {manager.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-zinc-600">
+                        {row.role === "Administrador" ||
+                        row.role === "Líder de departamento"
+                          ? "Nivel superior"
+                          : "Sin superior disponible"}
+                      </span>
+                    )}
                   </td>
                   <td className="text-zinc-500">
                     {row.role === "Administrador"
                       ? "Todos los departamentos y zonas"
-                      : `${row.department} · ${row.zone}`}
+                      : row.role === "Líder de departamento"
+                        ? `${row.department} · supervisores y equipos`
+                        : row.role === "Supervisor"
+                          ? `${row.zone} · propia + vendedores asignados`
+                          : `${row.department} · ${row.zone}`}
                   </td>
                   <td>
                     <button
@@ -1937,16 +2045,22 @@ function AccessManagementDashboard({
         </div>
       </Card>
       {creating && (
-        <InviteUserModal onClose={() => setCreating(false)} onSubmit={invite} />
+        <InviteUserModal
+          profiles={rows}
+          onClose={() => setCreating(false)}
+          onSubmit={invite}
+        />
       )}
     </div>
   );
 }
 
 function InviteUserModal({
+  profiles,
   onClose,
   onSubmit,
 }: {
+  profiles: Profile[];
   onClose: () => void;
   onSubmit: (
     input: NewUserInput,
@@ -1960,6 +2074,7 @@ function InviteUserModal({
     jobProfile: "Community Manager",
     zone: "Zona Norte",
     role: "Analista",
+    managerId: null,
   });
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -1977,6 +2092,7 @@ function InviteUserModal({
     setDraft((current) => ({
       ...current,
       role: value,
+      managerId: null,
       department:
         value === "Administrador"
           ? "Administración"
@@ -1986,6 +2102,10 @@ function InviteUserModal({
       jobProfile:
         value === "Administrador"
           ? "Administrador"
+          : value === "Líder de departamento" ||
+              value === "Supervisor" ||
+              value === "Operador"
+            ? defaultJobProfile(value)
           : current.jobProfile === "Administrador"
             ? "Analista"
             : current.jobProfile,
@@ -2067,11 +2187,7 @@ function InviteUserModal({
                 onChange={(e) => role(e.target.value as Role)}
                 className="mt-2 w-full rounded-xl border border-white/10 bg-[#111116] p-3 text-xs text-white"
               >
-                {["Administrador", "Gerente", "Analista", "Operador"].map(
-                  (value) => (
-                    <option key={value}>{value}</option>
-                  ),
-                )}
+                {roles.map((value) => <option key={value}>{value}</option>)}
               </select>
             </label>
             <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">
@@ -2085,6 +2201,7 @@ function InviteUserModal({
                   setDraft({
                     ...draft,
                     jobProfile,
+                    managerId: null,
                     department: available.includes(draft.department)
                       ? draft.department
                       : available[0],
@@ -2106,6 +2223,7 @@ function InviteUserModal({
                   setDraft({
                     ...draft,
                     department: e.target.value as Department,
+                    managerId: null,
                   })
                 }
                 className="mt-2 w-full rounded-xl border border-white/10 bg-[#111116] p-3 text-xs text-white disabled:opacity-60"
@@ -2120,7 +2238,13 @@ function InviteUserModal({
               <select
                 disabled={draft.role === "Administrador"}
                 value={draft.zone}
-                onChange={(e) => setDraft({ ...draft, zone: e.target.value })}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    zone: e.target.value,
+                    managerId: null,
+                  })
+                }
                 className="mt-2 w-full rounded-xl border border-white/10 bg-[#111116] p-3 text-xs text-white disabled:opacity-60"
               >
                 {zones.map((value) => (
@@ -2128,11 +2252,39 @@ function InviteUserModal({
                 ))}
               </select>
             </label>
+            {draft.role !== "Administrador" &&
+              draft.role !== "Líder de departamento" && (
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-600 sm:col-span-2">
+                  Reporta a
+                  <select
+                    value={draft.managerId || ""}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        managerId: e.target.value || null,
+                      })
+                    }
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-[#111116] p-3 text-xs text-white"
+                  >
+                    <option value="">Sin asignar todavía</option>
+                    {managerCandidates(
+                      profiles,
+                      draft.role,
+                      draft.department,
+                      draft.zone,
+                    ).map((manager) => (
+                      <option key={manager.id} value={manager.id}>
+                        {manager.name} · {manager.role} · {manager.zone}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
           </div>
           <div className="mt-5 rounded-xl border border-purple-400/15 bg-purple-500/[.05] p-3 text-[10px] leading-5 text-zinc-400">
-            <b className="text-purple-300">Acceso automático:</b> Administrador
-            ve todo; Gerente, Analista y Operador quedan limitados a la
-            combinación de departamento y zona seleccionada.
+            <b className="text-purple-300">Acceso automático:</b> el líder ve
+            sus supervisores y equipos; el supervisor ve su venta propia más
+            la de sus vendedores; los demás quedan limitados a su asignación.
           </div>
           {error && (
             <p className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-3 text-xs text-rose-300">
@@ -2606,13 +2758,22 @@ export function AnalyticsApp({
           department={profile.department}
         />
       );
+    if (
+      active === "Ventas digitales" ||
+      active === "Ventas residenciales" ||
+      active === "Ventas residenciales rurales" ||
+      active === "Ventas corporativas"
+    )
+      return (
+        <SalesOrganizationDashboard profile={profile} profiles={profiles} />
+      );
     if (active === "Marketing digital") return <MarketingDashboard />;
     if (active === "ROA y ROAS") return <RoasDashboard />;
     if (active === "Recursos humanos") return <HrDashboard />;
     if (active === "Finanzas") return <FinanceDashboard />;
     if (active === "Operaciones") return <OperationsDashboard />;
     if (active === "Reportes")
-      return <ReportsDashboard department={profile.department} />;
+      return <ReportStudio profile={profile} profiles={profiles} />;
     if (active === "Importar datos")
       return (
         <PersistentImportDashboard
