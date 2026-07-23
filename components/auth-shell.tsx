@@ -32,6 +32,7 @@ type HubProfile = {
   zone?: string | null;
   analytics_enabled?: boolean;
   analytics_role?: string;
+  reports_to?: string | null;
 };
 
 export function AuthShell() {
@@ -88,7 +89,7 @@ export function AuthShell() {
             "Tu acceso a CC ANALYTICS está inactivo o pendiente de aprobación. Contacta al administrador.",
           );
         setProfile(mapped);
-        if (mapped.role === "Administrador") {
+        {
           const { data: all } = await supabase
             .from("profiles")
             .select("id,full_name,email,department,role,status,job_title")
@@ -99,9 +100,15 @@ export function AuthShell() {
           const { data: profileZones } = await supabase
             .from("profiles")
             .select("id,zone");
+          const { data: hierarchy } = await supabase
+            .from("profiles")
+            .select("id,reports_to");
           const access = new Map((analytics || []).map((row) => [row.id, row]));
           const zoneAccess = new Map(
             (profileZones || []).map((row) => [row.id, row]),
+          );
+          const hierarchyAccess = new Map(
+            (hierarchy || []).map((row) => [row.id, row]),
           );
           setProfiles(
             (all || []).flatMap((row) => {
@@ -111,6 +118,7 @@ export function AuthShell() {
                     ...row,
                     ...access.get(row.id),
                     ...zoneAccess.get(row.id),
+                    ...hierarchyAccess.get(row.id),
                   } as HubProfile),
                 ];
               } catch {
@@ -118,7 +126,7 @@ export function AuthShell() {
               }
             }),
           );
-        } else setProfiles([mapped]);
+        }
       } catch (e) {
         setError(
           e instanceof Error ? e.message : "No se pudo cargar el perfil.",
@@ -150,14 +158,17 @@ export function AuthShell() {
     const hubRole =
       updated.role === "Administrador"
         ? "administrador"
-        : updated.role === "Gerente"
+        : updated.role === "Líder de departamento" ||
+            updated.role === "Supervisor"
           ? "supervisor"
           : "colaborador";
     const analyticsRole =
       updated.role === "Administrador"
         ? "admin"
-        : updated.role === "Gerente"
-          ? "manager"
+        : updated.role === "Líder de departamento"
+          ? "leader"
+          : updated.role === "Supervisor"
+            ? "supervisor"
           : updated.role === "Operador"
             ? "uploader"
             : "analyst";
@@ -166,6 +177,7 @@ export function AuthShell() {
       target_department: updated.department,
       target_job_title: updated.jobProfile,
       target_zone: updated.zone,
+      target_reports_to: updated.managerId,
       target_hub_role: hubRole,
       target_status: updated.active ? "activo" : "inactivo",
       target_analytics_enabled: updated.active,
@@ -182,6 +194,7 @@ export function AuthShell() {
       jobProfile: input.jobProfile,
       zone: input.zone,
       role: input.role,
+      managerId: input.managerId,
       initials: "",
       active: false,
     });
@@ -196,6 +209,7 @@ export function AuthShell() {
           job_title: input.jobProfile,
           department: input.department,
           zone: input.zone,
+          reports_to: input.managerId,
         },
         emailRedirectTo: window.location.origin,
       },
@@ -210,6 +224,7 @@ export function AuthShell() {
       jobProfile: input.jobProfile,
       zone: input.zone,
       role: input.role,
+      managerId: input.managerId,
       initials: input.name
         .trim()
         .split(/\s+/)
@@ -277,6 +292,20 @@ export function AuthShell() {
       const { error } = await supabase.from("analytics_records").insert(batch);
       if (error) return `La carga quedó incompleta: ${error.message}`;
     }
+    const sales = normalizeSalesRows(
+      rows,
+      upload,
+      created.id,
+      currentProfile.id,
+      profiles,
+    );
+    for (let start = 0; start < sales.length; start += 500) {
+      const { error } = await supabase
+        .from("analytics_sales")
+        .insert(sales.slice(start, start + 500));
+      if (error)
+        return `La carga original se guardó, pero faltó alimentar los comparativos: ${friendlySupabaseError(error.message)}`;
+    }
     return null;
   }
   return (
@@ -290,6 +319,86 @@ export function AuthShell() {
       onImportData={importData}
     />
   );
+}
+
+function normalizeSalesRows(
+  rows: ImportedRow[],
+  upload: Upload,
+  importId: string,
+  createdBy: string,
+  profiles: Profile[],
+) {
+  const profilesByName = new Map(
+    profiles.map((profile) => [normalizePersonName(profile.name), profile.id]),
+  );
+  return rows.flatMap((payload) => {
+    const sellerName = String(payload.Vendedor ?? "").trim();
+    const rawDate = payload["Fecha Facturación"];
+    const saleDate = normalizeSaleDate(rawDate);
+    if (!sellerName || !saleDate) return [];
+    const primary = payload["Es Primario"];
+    return [
+      {
+        source_import_id: importId,
+        department: upload.department,
+        zone: upload.zone,
+        seller_profile_id:
+          profilesByName.get(normalizePersonName(sellerName)) || null,
+        seller_name: sellerName,
+        team: stringOrNull(payload.Equipo),
+        sale_date: saleDate,
+        country: stringOrNull(payload["País"]),
+        region: stringOrNull(payload["Región"]),
+        city: stringOrNull(payload.Ciudad),
+        sale_type: stringOrNull(payload["Tipo De Venta*"]),
+        service: stringOrNull(payload.Servicio),
+        medium: stringOrNull(payload.Medio),
+        is_primary:
+          typeof primary === "boolean"
+            ? primary
+            : /^(si|sí|true|1)$/i.test(String(primary ?? "")),
+        contract_service: stringOrNull(payload["Contrato Servicio"]),
+        amount_billed: numberOrNull(payload["Ingreso Facturación"]),
+        commission_income: numberOrNull(payload["Ingreso Para Comisión"]),
+        payload,
+        created_by: createdBy,
+      },
+    ];
+  });
+}
+
+function normalizePersonName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeSaleDate(value: unknown) {
+  const text = String(value ?? "").trim();
+  const latin = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  const date =
+    value instanceof Date
+      ? value
+      : latin
+        ? new Date(Number(latin[3]), Number(latin[2]) - 1, Number(latin[1]))
+        : new Date(text);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function stringOrNull(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  return normalized || null;
+}
+
+function numberOrNull(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const normalized = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(normalized) ? normalized : null;
 }
 
 function friendlySupabaseError(message: string) {
@@ -332,11 +441,17 @@ async function loadCurrentProfile(id: string) {
     .select("zone")
     .eq("id", id)
     .maybeSingle();
+  const { data: hierarchy } = await supabase
+    .from("profiles")
+    .select("reports_to")
+    .eq("id", id)
+    .maybeSingle();
   return {
     data: {
       ...data,
       ...(analytics || {}),
       ...(profileZone || {}),
+      ...(hierarchy || {}),
     } as HubProfile,
     currentError: "",
   };
@@ -346,8 +461,10 @@ function mapProfile(row: HubProfile): Profile {
   const role =
     row.analytics_role === "admin"
       ? "Administrador"
-      : row.analytics_role === "manager"
-        ? "Gerente"
+      : row.analytics_role === "leader" || row.analytics_role === "manager"
+        ? "Líder de departamento"
+        : row.analytics_role === "supervisor"
+          ? "Supervisor"
         : row.analytics_role === "uploader"
           ? "Operador"
           : row.analytics_role
@@ -355,7 +472,7 @@ function mapProfile(row: HubProfile): Profile {
             : row.role === "administrador"
               ? "Administrador"
               : row.role === "supervisor"
-                ? "Gerente"
+                ? "Supervisor"
                 : "Analista";
   const department = normalizeDepartment(row.department, role);
   const name = row.full_name?.trim() || row.email;
@@ -376,6 +493,7 @@ function mapProfile(row: HubProfile): Profile {
     jobProfile,
     zone,
     role,
+    managerId: row.reports_to || null,
     initials,
     active: row.status === "activo" && row.analytics_enabled !== false,
   };
@@ -400,6 +518,8 @@ function normalizeDepartment(
     "ventas digitales": "Ventas Digitales",
     "ventas residencial": "Ventas Residenciales",
     "ventas residenciales": "Ventas Residenciales",
+    "ventas residenciales rurales": "Ventas Residenciales Rurales",
+    "ventas residencial rural": "Ventas Residenciales Rurales",
     "ventas corporativas": "Ventas Corporativas",
     marketing: "Marketing",
     "marketing digital": "Marketing",
