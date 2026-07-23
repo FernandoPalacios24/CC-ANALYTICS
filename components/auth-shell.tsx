@@ -113,9 +113,24 @@ export function AuthShell() {
             10_000,
             "El directorio de usuarios tardó demasiado.",
           );
-          if (!active || directoryError) return;
+          let availableDirectory = directory as HubProfile[] | null;
+          if (directoryError) {
+            const legacyDirectory = await withTimeout(
+              supabase
+                .from("profiles")
+                .select(
+                  "id,full_name,email,department,role,status,job_title,analytics_enabled,analytics_role",
+                )
+                .order("full_name"),
+              10_000,
+              "El directorio de usuarios tardó demasiado.",
+            );
+            if (legacyDirectory.error) return;
+            availableDirectory = legacyDirectory.data as HubProfile[] | null;
+          }
+          if (!active) return;
           setProfiles(
-            (directory || []).flatMap((row) => {
+            (availableDirectory || []).flatMap((row) => {
               try {
                 return [mapProfile(row as HubProfile)];
               } catch {
@@ -179,7 +194,7 @@ export function AuthShell() {
           : updated.role === "Operador"
             ? "uploader"
             : "analyst";
-    const { error } = await supabase.rpc("admin_set_user_access", {
+    const fullAccess = {
       target_user_id: updated.id,
       target_department: updated.department,
       target_job_title: updated.jobProfile,
@@ -189,8 +204,65 @@ export function AuthShell() {
       target_status: updated.active ? "activo" : "inactivo",
       target_analytics_enabled: updated.active,
       target_analytics_role: analyticsRole,
-    });
-    return error ? friendlySupabaseError(error.message) : null;
+    };
+    const { error: currentError } = await supabase.rpc(
+      "admin_set_user_access",
+      fullAccess,
+    );
+    if (!currentError) return null;
+    if (!isMissingAdminRpc(currentError.message))
+      return friendlySupabaseError(currentError.message);
+
+    // Compatibilidad con las versiones anteriores del script que ya fueron
+    // instaladas en CC HUB. Se intenta de la más reciente a la más antigua.
+    const legacyAnalyticsRole =
+      updated.role === "Administrador"
+        ? "admin"
+        : updated.role === "Líder de departamento"
+          ? "manager"
+          : updated.role === "Supervisor"
+            ? "analyst"
+            : updated.role === "Operador"
+              ? "uploader"
+              : "analyst";
+    const legacyCalls = [
+      {
+        target_user_id: updated.id,
+        target_department: updated.department,
+        target_job_title: updated.jobProfile,
+        target_zone: updated.zone,
+        target_hub_role: hubRole,
+        target_status: updated.active ? "activo" : "inactivo",
+        target_analytics_enabled: updated.active,
+        target_analytics_role: legacyAnalyticsRole,
+      },
+      {
+        target_user_id: updated.id,
+        target_department: updated.department,
+        target_hub_role: hubRole,
+        target_status: updated.active ? "activo" : "inactivo",
+        target_analytics_enabled: updated.active,
+        target_analytics_role: legacyAnalyticsRole,
+      },
+      {
+        target_user_id: updated.id,
+        target_department: updated.department,
+        target_analytics_enabled: updated.active,
+        target_analytics_role: legacyAnalyticsRole,
+      },
+    ];
+    let lastError = currentError.message;
+    for (const parameters of legacyCalls) {
+      const { error } = await supabase.rpc(
+        "admin_set_user_access",
+        parameters,
+      );
+      if (!error) return null;
+      lastError = error.message;
+      if (!isMissingAdminRpc(error.message))
+        return friendlySupabaseError(error.message);
+    }
+    return friendlySupabaseError(lastError);
   }
   async function inviteUser(input: NewUserInput) {
     const preflight = await updateAccess({
@@ -410,11 +482,8 @@ function numberOrNull(value: unknown) {
 
 function friendlySupabaseError(message: string) {
   const normalized = message.toLowerCase();
-  if (
-    normalized.includes("admin_set_user_access") ||
-    normalized.includes("schema cache")
-  )
-    return "La configuración administrativa todavía no está instalada en Supabase. El propietario debe ejecutar el script cc-analytics-integration.sql una sola vez.";
+  if (isMissingAdminRpc(message))
+    return "No se encontró ninguna versión compatible de la configuración administrativa de Supabase. Actualiza la integración desde Administración.";
   if (
     normalized.includes("user already registered") ||
     normalized.includes("already been registered")
@@ -425,6 +494,16 @@ function friendlySupabaseError(message: string) {
   if (normalized.includes("email rate limit"))
     return "Supabase alcanzó temporalmente el límite de correos. Intenta nuevamente en unos minutos.";
   return message;
+}
+
+function isMissingAdminRpc(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("admin_set_user_access") &&
+    (normalized.includes("schema cache") ||
+      normalized.includes("could not find") ||
+      normalized.includes("pgrst202"))
+  );
 }
 
 async function loadCurrentProfile(id: string) {
@@ -450,7 +529,9 @@ async function loadCurrentProfile(id: string) {
   const base = await withTimeout(
     supabase
       .from("profiles")
-      .select("id,full_name,email,department,role,status,job_title")
+      .select(
+        "id,full_name,email,department,role,status,job_title,analytics_enabled,analytics_role",
+      )
       .eq("id", id)
       .single(),
     8_000,
@@ -494,7 +575,7 @@ function mapProfile(row: HubProfile): Profile {
       ? "Administrador"
       : row.analytics_role === "leader" || row.analytics_role === "manager"
         ? "Líder de departamento"
-        : row.analytics_role === "supervisor"
+        : row.analytics_role === "supervisor" || row.role === "supervisor"
           ? "Supervisor"
         : row.analytics_role === "uploader"
           ? "Operador"
