@@ -10,13 +10,3 @@ export const supabase = createClient(url, publishableKey, {
     detectSessionInUrl: true,
   },
 });
-
-export function createSignupClient() {
-  return createClient(url, publishableKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  });
-}
