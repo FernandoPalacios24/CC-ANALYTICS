@@ -1,30 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const dimensions = [
-  "month",
-  "date",
-  "department",
-  "zone",
-  "region",
-  "city",
-  "supervisor",
-  "seller",
-  "team",
-  "sale_type",
-  "service",
-  "medium",
-  "package",
-  "primary",
-] as const;
-const metrics = [
-  "sales",
-  "amount_billed",
-  "commission_income",
-  "average_ticket",
-  "active_sellers",
-] as const;
-const blockTypes = [
+const visualTypes = [
   "kpi",
   "table",
   "pivot",
@@ -35,15 +12,60 @@ const blockTypes = [
   "traffic",
   "funnel",
 ] as const;
+const aggregations = [
+  "count",
+  "sum",
+  "average",
+  "min",
+  "max",
+  "distinct",
+] as const;
+const calculations = [
+  "none",
+  "share",
+  "projection",
+  "month_change",
+  "goal_progress",
+] as const;
+const filterOperators = [
+  "equals",
+  "not_equals",
+  "contains",
+  "not_contains",
+  "greater",
+  "less",
+  "between",
+] as const;
+
+const filterSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    id: { type: "string" },
+    field: { type: "string" },
+    operator: { type: "string", enum: filterOperators },
+    value: { type: "string" },
+    valueTo: { type: "string" },
+  },
+  required: ["id", "field", "operator", "value", "valueTo"],
+};
 
 const reportSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
+    version: { type: "integer", enum: [3] },
     title: { type: "string" },
     description: { type: "string" },
     analysis: { type: "string" },
-    blocks: {
+    source: { type: "string", enum: ["sales", "imports"] },
+    goal: { type: "number" },
+    globalFilters: {
+      type: "array",
+      maxItems: 8,
+      items: filterSchema,
+    },
+    widgets: {
       type: "array",
       minItems: 1,
       maxItems: 8,
@@ -53,41 +75,48 @@ const reportSchema = {
         properties: {
           id: { type: "string" },
           title: { type: "string" },
-          type: { type: "string", enum: blockTypes },
-          dimension: { type: "string", enum: dimensions },
-          secondaryDimension: {
-            type: "string",
-            enum: ["none", ...dimensions],
-          },
-          metric: { type: "string", enum: metrics },
+          type: { type: "string", enum: visualTypes },
+          rowField: { type: "string" },
+          columnField: { type: "string" },
+          valueField: { type: "string" },
+          aggregation: { type: "string", enum: aggregations },
+          calculation: { type: "string", enum: calculations },
+          formula: { type: "string" },
           sort: { type: "string", enum: ["desc", "asc"] },
-          limit: { type: "integer", minimum: 1, maximum: 200 },
-          filter: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              field: { type: "string", enum: dimensions },
-              operator: { type: "string", enum: ["equals", "contains"] },
-              value: { type: "string" },
-            },
-            required: ["field", "operator", "value"],
+          limit: { type: "integer", minimum: 1, maximum: 500 },
+          filters: {
+            type: "array",
+            maxItems: 8,
+            items: filterSchema,
           },
         },
         required: [
           "id",
           "title",
           "type",
-          "dimension",
-          "secondaryDimension",
-          "metric",
+          "rowField",
+          "columnField",
+          "valueField",
+          "aggregation",
+          "calculation",
+          "formula",
           "sort",
           "limit",
-          "filter",
+          "filters",
         ],
       },
     },
   },
-  required: ["title", "description", "analysis", "blocks"],
+  required: [
+    "version",
+    "title",
+    "description",
+    "analysis",
+    "source",
+    "goal",
+    "globalFilters",
+    "widgets",
+  ],
 };
 
 export async function POST(request: Request) {
@@ -141,20 +170,15 @@ export async function POST(request: Request) {
         {
           role: "system",
           content:
-            "Eres el copiloto de Business Intelligence de Cable Color Honduras. Convierte la solicitud en una composición útil, ejecutiva y editable de reportes. No inventes datos ni nombres. Usa entre 2 y 6 bloques, prioriza comparativos mensuales, jerarquía Líder > Supervisor > Vendedor, territorio y presentación clara. Responde únicamente con la estructura solicitada.",
+            "Eres el copiloto de Business Intelligence de Cable Color Honduras. Convierte la solicitud en una composición útil, ejecutiva y totalmente editable de reportes. Debes usar exclusivamente los nombres de campos recibidos en availableContext.fields; no traduzcas, inventes ni cambies esos nombres. Usa __rows como valueField para contar registros. Elige aggregation sum o average solo para campos numéricos. Usa entre 2 y 8 widgets. Para una presentación incluye indicadores, al menos una visualización y una tabla. Para comparar meses usa calculation month_change o una línea agrupada por el campo de mes disponible. Para proyección usa projection. Para cumplimiento usa goal_progress. Puedes crear todos los filtros solicitados. Responde únicamente con la estructura JSON solicitada y version 3.",
         },
         {
           role: "user",
           content: JSON.stringify({
             request: body.prompt,
             availableContext: body.context || {},
-            metricMeaning: {
-              sales: "cantidad de registros de venta",
-              amount_billed: "suma de monto facturado",
-              commission_income: "suma de ingreso por comisión",
-              average_ticket: "promedio de monto facturado",
-              active_sellers: "vendedores distintos con registros",
-            },
+            formulaSyntax:
+              "Opcional: SUMA([Campo]), PROMEDIO([Campo]), UNICOS([Campo]), CONTEO(), META y operadores + - * /.",
           }),
         },
       ],
