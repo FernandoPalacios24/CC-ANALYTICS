@@ -9,9 +9,12 @@ Plataforma empresarial de Business Intelligence para Cable Color Honduras. Usa l
 - Administrador con vista global y gestión de accesos.
 - Cargos separados del departamento: por ejemplo, Community Manager puede pertenecer a Marketing o Ventas Digitales.
 - Usuarios limitados a los módulos y datos de la combinación departamento + zona asignada.
-- Jerarquía comercial **Líder de departamento → Supervisor → Vendedor/Operador**.
-- El supervisor consulta su producción propia y el total de sus vendedores asignados.
-- El líder abre cada supervisor y vendedor por separado o consolida todo su departamento.
+- Jerarquía de acceso **Líder de departamento → Supervisor → Analista/Operador**.
+- Los vendedores no son usuarios: se cargan como registros comerciales
+  asociados al supervisor por nombre/código.
+- El supervisor consulta su producción propia y el total de los vendedores
+  cargados bajo su perfil; el líder abre cada supervisor y equipo por separado o
+  consolida todo su departamento.
 - Comparativos entre cualquier par de meses con análisis automático de variación, proyección, meta y semáforo.
 - Perfil editable con persistencia real.
 - Dashboards ejecutivos, ventas, marketing, ROAS, operaciones, RR. HH. y finanzas.
@@ -20,6 +23,10 @@ Plataforma empresarial de Business Intelligence para Cable Color Honduras. Usa l
 - Copiloto en lenguaje natural para crear composiciones completas. Tiene un motor inteligente local listo para usar y puede conectarse a OpenAI desde el servidor.
 - Plantillas reutilizables en Supabase con alcance por usuario, departamento y zona.
 - PDF y CSV generados desde cualquier combinación activa.
+- Invitaciones administrativas seguras por correo, sin contraseñas temporales
+  expuestas al navegador.
+- Bitácora administrativa inmutable para invitaciones, cambios de acceso e
+  importaciones.
 - Descarga CSV, alertas y proyecciones.
 - Diseño responsive negro y morado neón.
 
@@ -36,14 +43,16 @@ Variables requeridas:
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+SUPABASE_SERVICE_ROLE_KEY=
 OPENAI_API_KEY=
 OPENAI_REPORT_MODEL=gpt-5.6-sol
 ```
 
 `OPENAI_API_KEY` es opcional: sin ella, el copiloto usa el planificador local y
 el constructor manual conserva toda su funcionalidad. La clave de OpenAI y una
-eventual `service_role` nunca deben usar el prefijo `NEXT_PUBLIC_` ni llegar al
-navegador.
+`SUPABASE_SERVICE_ROLE_KEY` nunca deben usar el prefijo `NEXT_PUBLIC_` ni llegar
+al navegador. La clave de servicio es obligatoria para enviar invitaciones
+administrativas.
 
 ## Configuración del Supabase compartido
 
@@ -51,9 +60,16 @@ navegador.
 2. En SQL Editor ejecuta `supabase/cc-analytics-integration.sql`. El script es idempotente y se puede volver a ejecutar al actualizar la plataforma.
 3. Inicia sesión como administrador de CC HUB.
 4. En **Usuarios y permisos**, activa cada usuario y asigna cargo, departamento, zona y rol.
-5. Asigna cada supervisor a su líder y cada vendedor/operador a su supervisor usando **Reporta a**.
+5. Asigna cada supervisor a su líder y cada analista/operador a su supervisor usando **Reporta a**.
+6. Ejecuta `supabase/corporate-readiness-check.sql` y confirma que el conteo de
+   vendedores con acceso sea cero.
 
-La migración agrega los campos de acceso a Analytics, `reports_to`, la tabla normalizada `analytics_sales`, las tablas de auditoría de importaciones, `analytics_report_templates`, funciones administrativas y políticas RLS jerárquicas. Los administradores activos de CC HUB se habilitan automáticamente con alcance nacional. Las zonas iniciales son Nacional, Zona Norte, Zona Centro y Zona Sur; se pueden añadir otras sin cambiar la estructura de la base.
+La migración agrega los campos de acceso a Analytics, `reports_to`, la tabla
+normalizada `analytics_sales`, la bitácora `analytics_audit_log`,
+`analytics_report_templates`, funciones administrativas y políticas RLS
+jerárquicas. Los administradores activos de CC HUB se habilitan automáticamente
+con alcance nacional. Las zonas iniciales son Nacional, Zona Norte, Zona Centro
+y Zona Sur; se pueden añadir otras sin cambiar la estructura de la base.
 
 ## Copiloto de reportes
 
@@ -66,18 +82,26 @@ servidor.
 
 ## Seguridad
 
-- Los administradores pueden crear e invitar cuentas compartidas desde CC ANALYTICS.
-- El alta crea el usuario en Supabase Auth y el mismo perfil habilita CC HUB y CC ANALYTICS.
+- Los administradores invitan cuentas compartidas desde un endpoint de servidor.
+- Supabase envía un enlace para que cada persona establezca su contraseña; CC
+  Analytics no solicita ni conserva contraseñas temporales.
 - El navegador usa únicamente la clave pública de Supabase.
 - RLS impide que un usuario consulte o cargue datos fuera de su departamento, zona y tramo jerárquico.
 - Los cambios de rol y estado pasan por una función `security definer` que valida al administrador.
+- Una restricción de base de datos impide habilitar como usuario Analytics a
+  cualquier perfil con cargo Vendedor o Ejecutivo de ventas.
 - `.env.local` no debe versionarse.
+
+Consulta [docs/CORPORATE-RUNBOOK.md](docs/CORPORATE-RUNBOOK.md) para puesta en
+producción, respaldo, monitoreo e incidentes.
 
 ## Validación
 
 ```bash
 npm run build
 npm run lint
+npm test
 ```
 
+GitHub Actions ejecuta lint, build y pruebas en cada PR y cada cambio a `main`.
 El proyecto también está configurado para despliegue en Vercel y ChatGPT Sites.
