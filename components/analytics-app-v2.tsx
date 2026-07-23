@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import Papa from "papaparse";
-import * as XLSX from "xlsx";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
   AlertTriangle,
@@ -65,10 +70,18 @@ import {
   YAxis,
 } from "recharts";
 import { citySales, monthly, salesTrend, sellers } from "@/lib/data";
-import {
-  SalesOrganizationDashboard,
-} from "@/components/sales-intelligence";
-import { ReportStudioV3 } from "@/components/report-studio-v3";
+import { supabase } from "@/lib/supabase-client";
+
+const SalesOrganizationDashboard = lazy(() =>
+  import("@/components/sales-intelligence").then((module) => ({
+    default: module.SalesOrganizationDashboard,
+  })),
+);
+const ReportStudioV3 = lazy(() =>
+  import("@/components/report-studio-v3").then((module) => ({
+    default: module.ReportStudioV3,
+  })),
+);
 
 export type Department =
   | "Administración"
@@ -103,7 +116,6 @@ export type Profile = {
 export type NewUserInput = {
   name: string;
   email: string;
-  password: string;
   department: Department;
   jobProfile: string;
   zone: Zone;
@@ -137,7 +149,6 @@ const departments: Department[] = [
 const zones: Zone[] = ["Nacional", "Zona Norte", "Zona Centro", "Zona Sur"];
 const jobProfiles = [
   "Community Manager",
-  "Ejecutivo de ventas",
   "Líder de departamento",
   "Supervisor",
   "Analista",
@@ -204,33 +215,6 @@ function defaultJobProfile(role: Role) {
   if (role === "Administrador") return "Administrador";
   return "Analista";
 }
-
-const initialProfiles: Profile[] = [
-  {
-    id: "demo-admin",
-    name: "Fernando Palacios",
-    email: "fernando.palacios@cablecolor.hn",
-    department: "Administración",
-    jobProfile: "Administrador",
-    zone: "Nacional",
-    role: "Administrador",
-    managerId: null,
-    initials: "FP",
-    active: true,
-  },
-  {
-    id: "demo-sales",
-    name: "Andrea Sabillón",
-    email: "andrea.sabillon@cablecolor.hn",
-    department: "Ventas Digitales",
-    jobProfile: "Community Manager",
-    zone: "Zona Norte",
-    role: "Líder de departamento",
-    managerId: null,
-    initials: "AS",
-    active: true,
-  },
-];
 
 const moduleInfo = [
   {
@@ -335,6 +319,11 @@ const moduleInfo = [
   {
     name: "Usuarios y permisos",
     icon: UserCog,
+    departments: ["Administración"],
+  },
+  {
+    name: "Auditoría y seguridad",
+    icon: ShieldCheck,
     departments: ["Administración"],
   },
   { name: "Centro de alertas", icon: Bell, departments: departments },
@@ -1252,6 +1241,13 @@ function ImportDashboard({
             Responsable: {profile.name}
           </span>
         </div>
+        <div className="mb-4 rounded-xl border border-cyan-400/10 bg-cyan-500/[.035] p-3 text-[10px] leading-5 text-zinc-400">
+          Para ventas usa las columnas <b className="text-cyan-300">Vendedor</b>,
+          <b className="text-cyan-300"> Fecha Facturación</b> y
+          <b className="text-cyan-300"> Supervisor</b> o
+          <b className="text-cyan-300"> Equipo</b>. El vendedor se guarda como
+          dato comercial; no se crea una cuenta de acceso.
+        </div>
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
@@ -1399,7 +1395,8 @@ function PersistentImportDashboard({
     setFileName(file.name);
     try {
       let parsed: ImportedRow[] = [];
-      if (file.name.toLowerCase().endsWith(".csv"))
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        const { default: Papa } = await import("papaparse");
         parsed = await new Promise((resolve, reject) =>
           Papa.parse<ImportedRow>(file, {
             header: true,
@@ -1408,7 +1405,8 @@ function PersistentImportDashboard({
             error: reject,
           }),
         );
-      else {
+      } else {
+        const XLSX = await import("xlsx");
         const buffer = await file.arrayBuffer();
         const book = XLSX.read(buffer, { cellDates: true });
         const detailSheet = book.Sheets.Detalle;
@@ -1767,7 +1765,7 @@ function UsersDashboard({
                 }
                 className="rounded-xl border border-white/10 bg-[#111116] p-3 text-xs"
               >
-                {["Administrador", "Gerente", "Analista", "Operador"].map(
+                {roles.map(
                   (x) => (
                     <option key={x}>{x}</option>
                   ),
@@ -2069,7 +2067,6 @@ function InviteUserModal({
   const [draft, setDraft] = useState<NewUserInput>({
     name: "",
     email: "",
-    password: "",
     department: "Ventas Digitales",
     jobProfile: "Community Manager",
     zone: "Zona Norte",
@@ -2080,6 +2077,14 @@ function InviteUserModal({
   const [error, setError] = useState("");
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (
+      draft.role !== "Administrador" &&
+      draft.role !== "Líder de departamento" &&
+      !draft.managerId
+    ) {
+      setError("Selecciona el superior responsable antes de enviar.");
+      return;
+    }
     setSending(true);
     setError("");
     const result = await onSubmit(draft);
@@ -2131,8 +2136,9 @@ function InviteUserModal({
               </p>
               <h3 className="mt-1 text-xl font-black">Invitar nuevo usuario</h3>
               <p className="mt-2 text-xs leading-5 text-zinc-500">
-                Se creará una sola cuenta con acceso a CC HUB y CC ANALYTICS.
-                Supabase enviará la verificación al correo.
+                Se creará una sola identidad para CC HUB y CC ANALYTICS.
+                Supabase enviará un enlace seguro para que la persona establezca
+                su propia contraseña.
               </p>
             </div>
             <button
@@ -2164,20 +2170,6 @@ function InviteUserModal({
                 onChange={(e) => setDraft({ ...draft, email: e.target.value })}
                 className="mt-2 w-full rounded-xl border border-white/10 bg-white/[.03] p-3 text-xs text-white outline-none focus:border-purple-400/50"
                 placeholder="usuario@cablecolor.hn"
-              />
-            </label>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">
-              Contraseña temporal
-              <input
-                required
-                minLength={8}
-                type="password"
-                value={draft.password}
-                onChange={(e) =>
-                  setDraft({ ...draft, password: e.target.value })
-                }
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/[.03] p-3 text-xs text-white outline-none focus:border-purple-400/50"
-                placeholder="Mínimo 8 caracteres"
               />
             </label>
             <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">
@@ -2266,7 +2258,7 @@ function InviteUserModal({
                     }
                     className="mt-2 w-full rounded-xl border border-white/10 bg-[#111116] p-3 text-xs text-white"
                   >
-                    <option value="">Sin asignar todavía</option>
+                    <option value="">Selecciona un superior</option>
                     {managerCandidates(
                       profiles,
                       draft.role,
@@ -2285,6 +2277,8 @@ function InviteUserModal({
             <b className="text-purple-300">Acceso automático:</b> el líder ve
             sus supervisores y equipos; el supervisor ve su venta propia más
             la de sus vendedores; los demás quedan limitados a su asignación.
+            Los vendedores se cargan como datos comerciales y nunca reciben
+            usuario ni acceso a la plataforma.
           </div>
           {error && (
             <p className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-3 text-xs text-rose-300">
@@ -2304,7 +2298,7 @@ function InviteUserModal({
               className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-5 py-3 text-xs font-black disabled:opacity-50"
             >
               <Plus size={15} />
-              {sending ? "Creando cuenta..." : "Crear y enviar invitación"}
+              {sending ? "Enviando invitación..." : "Enviar invitación segura"}
             </button>
           </div>
         </form>
@@ -2356,6 +2350,139 @@ function AlertsDashboard() {
               {!read && <span className="h-2 w-2 rounded-full bg-purple-400" />}
             </div>
           ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+type AuditEvent = {
+  id: number;
+  actor_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  department: string | null;
+  zone: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
+const auditActionLabels: Record<string, string> = {
+  data_import_created: "Importación registrada",
+  profile_access_updated: "Acceso actualizado",
+  user_invite_requested: "Invitación solicitada",
+  user_invite_failed: "Invitación fallida",
+  user_invited: "Usuario invitado",
+  report_template_created: "Plantilla creada",
+  report_template_updated: "Plantilla actualizada",
+  report_template_deleted: "Plantilla eliminada",
+};
+
+function AuditDashboard({ profiles }: { profiles: Profile[] }) {
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void supabase
+      .from("analytics_audit_log")
+      .select(
+        "id,actor_id,action,entity_type,entity_id,department,zone,metadata,created_at",
+      )
+      .order("created_at", { ascending: false })
+      .limit(100)
+      .then(({ data, error: queryError }) => {
+        if (!active) return;
+        setEvents((data as AuditEvent[] | null) || []);
+        setError(
+          queryError
+            ? "La bitácora corporativa todavía no está instalada. Ejecuta la migración actualizada de Supabase."
+            : "",
+        );
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const profileNames = new globalThis.Map(
+    profiles.map((profile) => [profile.id, profile.name]),
+  );
+  return (
+    <div className="animate-in space-y-4">
+      <Card className="p-5">
+        <ChartHead
+          title="Auditoría y seguridad"
+          subtitle="Últimos 100 eventos administrativos e importaciones"
+        >
+          <span className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/15 bg-emerald-500/[.05] px-3 py-2 text-[10px] font-bold text-emerald-300">
+            <ShieldCheck size={13} /> SOLO ADMINISTRADORES
+          </span>
+        </ChartHead>
+        <p className="text-xs leading-5 text-zinc-500">
+          Los vendedores no aparecen en este directorio porque no son usuarios.
+          Su nombre y código viven únicamente en los registros comerciales
+          asociados a un supervisor.
+        </p>
+        {error && (
+          <p className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-3 text-xs text-rose-300">
+            {error}
+          </p>
+        )}
+      </Card>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[900px] text-left text-xs">
+            <thead className="border-b border-white/[.06] bg-white/[.02] text-[10px] uppercase tracking-wider text-zinc-600">
+              <tr>
+                <th className="px-5 py-3">Fecha</th>
+                <th>Evento</th>
+                <th>Responsable</th>
+                <th>Departamento</th>
+                <th>Zona</th>
+                <th>Referencia</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr>
+                  <td className="px-5 py-6 text-zinc-500" colSpan={6}>
+                    Cargando bitácora...
+                  </td>
+                </tr>
+              )}
+              {!loading && !events.length && !error && (
+                <tr>
+                  <td className="px-5 py-6 text-zinc-500" colSpan={6}>
+                    Aún no hay eventos auditados.
+                  </td>
+                </tr>
+              )}
+              {events.map((event) => (
+                <tr key={event.id} className="border-t border-white/[.05]">
+                  <td className="whitespace-nowrap px-5 py-3 text-zinc-400">
+                    {new Date(event.created_at).toLocaleString("es-HN")}
+                  </td>
+                  <td className="font-bold text-zinc-200">
+                    {auditActionLabels[event.action] || event.action}
+                  </td>
+                  <td className="text-purple-300">
+                    {event.actor_id
+                      ? profileNames.get(event.actor_id) || "Usuario registrado"
+                      : "Sistema"}
+                  </td>
+                  <td>{event.department || "Global"}</td>
+                  <td>{event.zone || "Nacional"}</td>
+                  <td className="max-w-56 truncate text-zinc-600">
+                    {event.entity_id || event.entity_type}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </Card>
     </div>
@@ -2813,6 +2940,8 @@ export function AnalyticsApp({
           }}
         />
       );
+    if (active === "Auditoría y seguridad" && profile.role === "Administrador")
+      return <AuditDashboard profiles={profiles} />;
     if (active === "Centro de alertas") return <AlertsDashboard />;
     return <AreaDashboard name={active} department={profile.department} />;
   }
@@ -2959,7 +3088,15 @@ export function AnalyticsApp({
             setFilters={setFilters}
             profile={profile}
           />
-          {content()}
+          <Suspense
+            fallback={
+              <Card className="p-8 text-center text-xs text-zinc-500">
+                Cargando módulo...
+              </Card>
+            }
+          >
+            {content()}
+          </Suspense>
           <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-white/[.05] py-5 text-[10px] text-zinc-700 sm:flex-row">
             <span>CC ANALYTICS · Cable Color Honduras</span>
             <span>
