@@ -16,8 +16,10 @@ Plataforma empresarial de Business Intelligence para Cable Color Honduras. Usa l
 - Perfil editable con persistencia real.
 - Dashboards ejecutivos, ventas, marketing, ROAS, operaciones, RR. HH. y finanzas.
 - Importación de Excel y CSV almacenada por departamento y zona en Supabase. El formato operativo reconoce automáticamente la hoja `Detalle`, conserva el registro original y normaliza sus ventas.
-- Constructor de reportes con combinación de departamento, meses, supervisor y vendedor.
-- PDF ejecutivo de tres páginas inspirado en la presentación comercial: venta y proyección, vendedores y semáforo, ciudades y paquetes.
+- Laboratorio libre de reportes con campos, métricas, filas, columnas, filtros propios, orden, límites, tablas dinámicas y nueve tipos de visualización.
+- Copiloto en lenguaje natural para crear composiciones completas. Tiene un motor inteligente local listo para usar y puede conectarse a OpenAI desde el servidor.
+- Plantillas reutilizables en Supabase con alcance por usuario, departamento y zona.
+- PDF y CSV generados desde cualquier combinación activa.
 - Descarga CSV, alertas y proyecciones.
 - Diseño responsive negro y morado neón.
 
@@ -34,9 +36,14 @@ Variables requeridas:
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+OPENAI_API_KEY=
+OPENAI_REPORT_MODEL=gpt-5.6-sol
 ```
 
-No se usa una `service_role` en el navegador.
+`OPENAI_API_KEY` es opcional: sin ella, el copiloto usa el planificador local y
+el constructor manual conserva toda su funcionalidad. La clave de OpenAI y una
+eventual `service_role` nunca deben usar el prefijo `NEXT_PUBLIC_` ni llegar al
+navegador.
 
 ## Configuración del Supabase compartido
 
@@ -46,7 +53,16 @@ No se usa una `service_role` en el navegador.
 4. En **Usuarios y permisos**, activa cada usuario y asigna cargo, departamento, zona y rol.
 5. Asigna cada supervisor a su líder y cada vendedor/operador a su supervisor usando **Reporta a**.
 
-La migración agrega los campos de acceso a Analytics, `reports_to`, la tabla normalizada `analytics_sales`, las tablas de auditoría de importaciones, funciones administrativas y políticas RLS jerárquicas. Los administradores activos de CC HUB se habilitan automáticamente con alcance nacional. Las zonas iniciales son Nacional, Zona Norte, Zona Centro y Zona Sur; se pueden añadir otras sin cambiar la estructura de la base.
+La migración agrega los campos de acceso a Analytics, `reports_to`, la tabla normalizada `analytics_sales`, las tablas de auditoría de importaciones, `analytics_report_templates`, funciones administrativas y políticas RLS jerárquicas. Los administradores activos de CC HUB se habilitan automáticamente con alcance nacional. Las zonas iniciales son Nacional, Zona Norte, Zona Centro y Zona Sur; se pueden añadir otras sin cambiar la estructura de la base.
+
+## Copiloto de reportes
+
+El endpoint `app/api/report-copilot/route.ts` usa la Responses API y Structured
+Outputs para transformar una instrucción en una definición JSON validada. La
+petición envía únicamente el catálogo de campos y valores disponibles; los
+registros visibles se consultan antes con la sesión del usuario y las políticas
+RLS de Supabase. Para producción, configura `OPENAI_API_KEY` como secreto del
+servidor.
 
 ## Seguridad
 
