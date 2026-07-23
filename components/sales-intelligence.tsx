@@ -34,14 +34,7 @@ import {
 import type { Department, Profile } from "@/components/analytics-app-v2";
 import { supabase } from "@/lib/supabase-client";
 
-type MonthKey =
-  | "2026-01"
-  | "2026-02"
-  | "2026-03"
-  | "2026-04"
-  | "2026-05"
-  | "2026-06"
-  | "2026-07";
+type MonthKey = string;
 type Seller = {
   name: string;
   probation: boolean;
@@ -57,7 +50,8 @@ type Team = {
 };
 type ReportPageKey = "projection" | "performance" | "market";
 type SalesRecord = {
-  seller_profile_id: string | null;
+  supervisor_profile_id: string | null;
+  seller_code: string | null;
   seller_name: string;
   team: string | null;
   sale_date: string;
@@ -356,35 +350,16 @@ function totalFor(teamList: Team[], month: MonthKey) {
 
 function teamForSupervisor(
   supervisor: Profile,
-  profiles: Profile[],
   index = 0,
 ) {
   const base =
     teams.find((team) =>
       supervisor.name.toLowerCase().includes(team.supervisor.toLowerCase()),
     ) ?? teams[index % teams.length];
-  const assigned = profiles.filter(
-    (profile) => profile.managerId === supervisor.id,
-  );
-  const sellersForProfile = assigned.length
-    ? assigned.map((profile, sellerIndex) => {
-        const known = teams
-          .flatMap((team) => team.sellers)
-          .find(
-            (seller) =>
-              normalizeName(seller.name) === normalizeName(profile.name),
-          );
-        return {
-          ...(known ?? base.sellers[sellerIndex % base.sellers.length]),
-          name: profile.name,
-        };
-      })
-    : base.sellers;
   return {
     ...base,
     id: supervisor.id,
     supervisor: supervisor.name,
-    sellers: sellersForProfile,
   };
 }
 
@@ -395,7 +370,7 @@ function accessibleTeamsFor(profile: Profile, profiles: Profile[]) {
     );
     return supervisors.length
       ? supervisors.map((supervisor, index) =>
-          teamForSupervisor(supervisor, profiles, index),
+          teamForSupervisor(supervisor, index),
         )
       : teams;
   }
@@ -406,30 +381,16 @@ function accessibleTeamsFor(profile: Profile, profiles: Profile[]) {
     );
     return supervisors.length
       ? supervisors.map((supervisor, index) =>
-          teamForSupervisor(supervisor, profiles, index),
+          teamForSupervisor(supervisor, index),
         )
-      : teams;
+      : [];
   }
   if (profile.role === "Supervisor")
-    return [teamForSupervisor(profile, profiles)];
+    return [teamForSupervisor(profile)];
   const manager = profiles.find(
     (candidate) => candidate.id === profile.managerId,
   );
-  const base = manager
-    ? teamForSupervisor(manager, profiles)
-    : teamForSupervisor(profile, profiles);
-  const known = base.sellers.find(
-    (seller) => normalizeName(seller.name) === normalizeName(profile.name),
-  );
-  const seller = { ...(known ?? base.sellers[0]), name: profile.name };
-  return [
-    {
-      ...base,
-      own: values(0, 0, 0, 0, 0, 0, 0),
-      total: seller.values,
-      sellers: [seller],
-    },
-  ];
+  return manager ? [teamForSupervisor(manager)] : [];
 }
 
 function normalizeName(value: string) {
@@ -444,16 +405,25 @@ function useSalesRecords() {
   const [records, setRecords] = useState<SalesRecord[]>([]);
   useEffect(() => {
     let active = true;
-    void supabase
-      .from("analytics_sales")
-      .select(
-        "seller_profile_id,seller_name,team,sale_date,city,contract_service",
-      )
-      .order("sale_date", { ascending: true })
-      .limit(10000)
-      .then(({ data }) => {
-        if (active && data) setRecords(data as SalesRecord[]);
-      });
+    async function load() {
+      const loaded: SalesRecord[] = [];
+      const pageSize = 1_000;
+      const rowLimit = 20_000;
+      for (let from = 0; from < rowLimit; from += pageSize) {
+        const { data, error } = await supabase
+          .from("analytics_sales")
+          .select(
+            "supervisor_profile_id,seller_code,seller_name,team,sale_date,city,contract_service",
+          )
+          .order("sale_date", { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error || !data?.length) break;
+        loaded.push(...(data as SalesRecord[]));
+        if (data.length < pageSize) break;
+      }
+      if (active) setRecords(loaded);
+    }
+    void load();
     return () => {
       active = false;
     };
@@ -470,24 +440,41 @@ function hydrateTeams(teamList: Team[], records: SalesRecord[]) {
     ]),
   );
   return teamList.map((team) => {
-    const ownRows = records.filter(
+    const teamRows = records.filter(
       (row) =>
-        normalizeName(row.seller_name) === normalizeName(team.supervisor),
+        row.supervisor_profile_id === team.id ||
+        (!row.supervisor_profile_id &&
+          normalizeName(row.team || "") === normalizeName(team.supervisor)),
     );
-    const sellersForTeam = team.sellers.map((seller) => {
-      const sellerRows = records.filter(
-        (row) => normalizeName(row.seller_name) === normalizeName(seller.name),
-      );
-      return {
-        ...seller,
-        values: Object.fromEntries(
-          monthKeys.map((month) => [
-            month,
-            sellerRows.filter((row) => row.sale_date.startsWith(month)).length,
-          ]),
-        ),
-      };
-    });
+    if (!teamRows.length) return team;
+    const ownRows = teamRows.filter(
+      (row) => normalizeName(row.seller_name) === normalizeName(team.supervisor),
+    );
+    const groupedSellers = new Map<string, SalesRecord[]>();
+    teamRows
+      .filter(
+        (row) =>
+          normalizeName(row.seller_name) !== normalizeName(team.supervisor),
+      )
+      .forEach((row) => {
+        const key = row.seller_code || normalizeName(row.seller_name);
+        groupedSellers.set(key, [...(groupedSellers.get(key) || []), row]);
+      });
+    const sellersForTeam = Array.from(groupedSellers.values()).map(
+      (sellerRows) => {
+        const seller = sellerRows[0];
+        return {
+          name: seller.seller_name,
+          probation: false,
+          values: Object.fromEntries(
+            monthKeys.map((month) => [
+              month,
+              sellerRows.filter((row) => row.sale_date.startsWith(month)).length,
+            ]),
+          ),
+        };
+      },
+    );
     const own = Object.fromEntries(
       monthKeys.map((month) => [
         month,
@@ -572,7 +559,7 @@ export function SalesOrganizationDashboard({
     profile.role === "Analista" ||
     profile.role === "Operador";
   const [selected, setSelected] = useState(
-    forcedTeam ? accessibleTeams[0].id : "all",
+    forcedTeam ? accessibleTeams[0]?.id || "all" : "all",
   );
   const visibleTeams =
     selected === "all"
@@ -582,9 +569,10 @@ export function SalesOrganizationDashboard({
   const previous = totalFor(visibleTeams, "2026-06");
   const goal = visibleTeams.reduce((sum, team) => sum + team.goal, 0);
   const projection = Math.round((current / 13) * 26);
-  const assignedProfiles = profiles.filter(
-    (item) => item.managerId === profile.id,
-  ).length;
+  const loadedSellers = visibleTeams.reduce(
+    (sum, team) => sum + team.sellers.length,
+    0,
+  );
 
   return (
     <div className="animate-in space-y-4">
@@ -627,6 +615,12 @@ export function SalesOrganizationDashboard({
           </div>
         </div>
       </Panel>
+      {!accessibleTeams.length && (
+        <Panel className="border-amber-500/20 p-5 text-xs text-amber-200">
+          Este perfil todavía no tiene un supervisor asignado. Un administrador
+          debe completar la jerarquía antes de habilitar la vista comercial.
+        </Panel>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Metric
           label="Venta al corte"
@@ -647,16 +641,13 @@ export function SalesOrganizationDashboard({
         />
         <Metric
           label="Cumplimiento"
-          value={`${Math.round((projection / goal) * 100)}%`}
+          value={`${goal ? Math.round((projection / goal) * 100) : 0}%`}
           accent="text-green-400"
           icon={Trophy}
         />
         <Metric
-          label="Perfiles asignados"
-          value={String(
-            assignedProfiles ||
-              visibleTeams.reduce((sum, team) => sum + team.sellers.length, 0),
-          )}
+          label="Vendedores cargados"
+          value={String(loadedSellers)}
           accent="text-cyan-400"
           icon={Users}
         />
