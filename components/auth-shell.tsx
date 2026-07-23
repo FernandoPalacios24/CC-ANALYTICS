@@ -11,7 +11,7 @@ import {
   Mail,
   ShieldCheck,
 } from "lucide-react";
-import { createSignupClient, supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabase-client";
 import {
   AnalyticsApp,
   type Department,
@@ -210,115 +210,30 @@ export function AuthShell() {
       fullAccess,
     );
     if (!currentError) return null;
-    if (!isMissingAdminRpc(currentError.message))
-      return friendlySupabaseError(currentError.message);
-
-    // Compatibilidad con las versiones anteriores del script que ya fueron
-    // instaladas en CC HUB. Se intenta de la más reciente a la más antigua.
-    const legacyAnalyticsRole =
-      updated.role === "Administrador"
-        ? "admin"
-        : updated.role === "Líder de departamento"
-          ? "manager"
-          : updated.role === "Supervisor"
-            ? "analyst"
-            : updated.role === "Operador"
-              ? "uploader"
-              : "analyst";
-    const legacyCalls = [
-      {
-        target_user_id: updated.id,
-        target_department: updated.department,
-        target_job_title: updated.jobProfile,
-        target_zone: updated.zone,
-        target_hub_role: hubRole,
-        target_status: updated.active ? "activo" : "inactivo",
-        target_analytics_enabled: updated.active,
-        target_analytics_role: legacyAnalyticsRole,
-      },
-      {
-        target_user_id: updated.id,
-        target_department: updated.department,
-        target_hub_role: hubRole,
-        target_status: updated.active ? "activo" : "inactivo",
-        target_analytics_enabled: updated.active,
-        target_analytics_role: legacyAnalyticsRole,
-      },
-      {
-        target_user_id: updated.id,
-        target_department: updated.department,
-        target_analytics_enabled: updated.active,
-        target_analytics_role: legacyAnalyticsRole,
-      },
-    ];
-    let lastError = currentError.message;
-    for (const parameters of legacyCalls) {
-      const { error } = await supabase.rpc(
-        "admin_set_user_access",
-        parameters,
-      );
-      if (!error) return null;
-      lastError = error.message;
-      if (!isMissingAdminRpc(error.message))
-        return friendlySupabaseError(error.message);
-    }
-    return friendlySupabaseError(lastError);
+    return friendlySupabaseError(currentError.message);
   }
   async function inviteUser(input: NewUserInput) {
-    const preflight = await updateAccess({
-      id: "00000000-0000-0000-0000-000000000000",
-      name: "Verificación",
-      email: "",
-      department: input.department,
-      jobProfile: input.jobProfile,
-      zone: input.zone,
-      role: input.role,
-      managerId: input.managerId,
-      initials: "",
-      active: false,
-    });
-    if (preflight) return { error: preflight };
-    const signup = createSignupClient();
-    const { data, error } = await signup.auth.signUp({
-      email: input.email.trim().toLowerCase(),
-      password: input.password,
-      options: {
-        data: {
-          full_name: input.name.trim(),
-          job_title: input.jobProfile,
-          department: input.department,
-          zone: input.zone,
-          reports_to: input.managerId,
-        },
-        emailRedirectTo: window.location.origin,
+    const token = session?.access_token;
+    if (!token) return { error: "La sesión administrativa expiró." };
+    const response = await fetch("/api/admin/invite", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify(input),
     });
-    if (error) return { error: friendlySupabaseError(error.message) };
-    if (!data.user) return { error: "Supabase no devolvió el usuario creado." };
-    const invited: Profile = {
-      id: data.user.id,
-      name: input.name.trim(),
-      email: input.email.trim().toLowerCase(),
-      department: input.department,
-      jobProfile: input.jobProfile,
-      zone: input.zone,
-      role: input.role,
-      managerId: input.managerId,
-      initials: input.name
-        .trim()
-        .split(/\s+/)
-        .map((part) => part[0])
-        .slice(0, 2)
-        .join("")
-        .toUpperCase(),
-      active: true,
+    const result = (await response.json()) as {
+      profile?: Profile;
+      error?: string;
     };
-    const accessError = await updateAccess(invited);
-    if (accessError)
+    if (!response.ok || result.error)
       return {
-        error: `La cuenta fue creada, pero falta asignar sus permisos: ${accessError}`,
+        error:
+          result.error ||
+          "No se pudo enviar la invitación corporativa.",
       };
-    return { profile: invited };
+    return { profile: result.profile };
   }
   async function updateOwnProfile(name: string) {
     const { error } = await supabase
@@ -343,6 +258,19 @@ export function AuthShell() {
     return updated;
   }
   async function importData(upload: Upload, rows: ImportedRow[]) {
+    const previewSales = normalizeSalesRows(
+      rows,
+      upload,
+      "00000000-0000-0000-0000-000000000000",
+      currentProfile.id,
+      profiles,
+    );
+    const unassignedSales = previewSales.filter(
+      (sale) => !sale.supervisor_profile_id,
+    );
+    if (unassignedSales.length)
+      return `${unassignedSales.length.toLocaleString("es-HN")} ventas no tienen un supervisor reconocido. Verifica la columna Supervisor o Equipo y que el supervisor exista, esté activo y pertenezca a tu departamento y zona.`;
+
     const { data: created, error: importError } = await supabase
       .from("analytics_imports")
       .insert({
@@ -407,11 +335,29 @@ function normalizeSalesRows(
   createdBy: string,
   profiles: Profile[],
 ) {
-  const profilesByName = new Map(
-    profiles.map((profile) => [normalizePersonName(profile.name), profile.id]),
+  const supervisorsByName = new Map(
+    profiles
+      .filter(
+        (profile) =>
+          profile.role === "Supervisor" &&
+          profile.active &&
+          profile.department === upload.department &&
+          (profile.zone === upload.zone || profile.zone === "Nacional"),
+      )
+      .map((profile) => [normalizePersonName(profile.name), profile.id]),
   );
+  const uploader = profiles.find((profile) => profile.id === createdBy);
+  const uploaderSupervisor =
+    uploader?.role === "Supervisor"
+      ? uploader.id
+      : uploader?.role === "Analista" || uploader?.role === "Operador"
+        ? uploader.managerId
+        : null;
   return rows.flatMap((payload) => {
     const sellerName = String(payload.Vendedor ?? "").trim();
+    const supervisorName = String(
+      payload.Supervisor ?? payload.Equipo ?? "",
+    ).trim();
     const rawDate = payload["Fecha Facturación"];
     const saleDate = normalizeSaleDate(rawDate);
     if (!sellerName || !saleDate) return [];
@@ -421,8 +367,15 @@ function normalizeSalesRows(
         source_import_id: importId,
         department: upload.department,
         zone: upload.zone,
-        seller_profile_id:
-          profilesByName.get(normalizePersonName(sellerName)) || null,
+        seller_profile_id: null,
+        supervisor_profile_id:
+          supervisorsByName.get(normalizePersonName(supervisorName)) ||
+          uploaderSupervisor,
+        seller_code: stringOrNull(
+          payload["Código Vendedor"] ??
+            payload["Codigo Vendedor"] ??
+            payload["ID Vendedor"],
+        ),
         seller_name: sellerName,
         team: stringOrNull(payload.Equipo),
         sale_date: saleDate,
@@ -570,6 +523,10 @@ async function withTimeout<T>(
 }
 
 function mapProfile(row: HubProfile): Profile {
+  if (isSellerJob(row.job_title))
+    throw new Error(
+      "Los vendedores se gestionan como registros comerciales y no poseen acceso a CC ANALYTICS.",
+    );
   const role =
     row.analytics_role === "admin"
       ? "Administrador"
@@ -609,6 +566,15 @@ function mapProfile(row: HubProfile): Profile {
     initials,
     active: row.status === "activo" && row.analytics_enabled !== false,
   };
+}
+
+function isSellerJob(value: string | null | undefined) {
+  const job = (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+  return job.includes("vendedor") || job.includes("ejecutivo de ventas");
 }
 
 function normalizeZone(value: string | null | undefined) {
