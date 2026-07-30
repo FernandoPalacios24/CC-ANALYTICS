@@ -32,7 +32,7 @@ import {
 
 export function AuthShell() {
   const [session, setSession] = useState<Session | null>(null);
-  const [checking, setChecking] = useState(true);
+  const [checking, setChecking] = useState(supabaseConfigured);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [error, setError] = useState("");
@@ -40,10 +40,7 @@ export function AuthShell() {
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
-    if (!supabaseConfigured) {
-      setChecking(false);
-      return;
-    }
+    if (!supabaseConfigured) return;
 
     let mounted = true;
     void supabase.auth.getSession().then(({ data }) => {
