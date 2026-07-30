@@ -5,9 +5,9 @@ import test from "node:test";
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
 test("sellers are data records, never Analytics users", async () => {
-  const [ui, auth, migration] = await Promise.all([
+  const [ui, salesModel, migration] = await Promise.all([
     read("components/analytics-app-v2.tsx"),
-    read("components/auth-shell.tsx"),
+    read("lib/analytics-profile.ts"),
     read("supabase/cc-analytics-integration.sql"),
   ]);
 
@@ -15,10 +15,30 @@ test("sellers are data records, never Analytics users", async () => {
     ui,
     /jobProfiles\s*=\s*\[[\s\S]*?"Ejecutivo de ventas"/,
   );
-  assert.match(auth, /seller_profile_id:\s*null/);
-  assert.match(auth, /supervisor_profile_id:/);
+  assert.match(salesModel, /seller_profile_id:\s*null/);
+  assert.match(salesModel, /supervisor_profile_id:/);
   assert.match(migration, /profiles_no_seller_analytics_access/);
   assert.match(migration, /Los vendedores no reciben acceso a CC Analytics/);
+});
+
+test("Analytics authentication is independent from CC HUB", async () => {
+  const [client, auth, route, migration] = await Promise.all([
+    read("lib/supabase-client.ts"),
+    read("components/auth-shell.tsx"),
+    read("app/api/admin/invite/route.ts"),
+    read("supabase/cc-analytics-integration.sql"),
+  ]);
+
+  assert.doesNotMatch(client, /vvuxlzxbgnilzdtomyod/);
+  assert.doesNotMatch(auth, /\.from\(["']profiles["']\)/);
+  assert.doesNotMatch(auth, /app_memberships/);
+  assert.doesNotMatch(route, /\.from\(["']profiles["']\)/);
+  assert.doesNotMatch(route, /app_memberships/);
+  assert.doesNotMatch(migration, /public\.profiles\b/);
+  assert.doesNotMatch(migration, /public\.app_memberships\b/);
+  assert.match(auth, /\.from\(["']analytics_profiles["']\)/);
+  assert.match(route, /\.from\(["']analytics_profiles["']\)/);
+  assert.match(migration, /create table if not exists public\.analytics_profiles/);
 });
 
 test("administrative invitations stay on the server and are audited", async () => {
