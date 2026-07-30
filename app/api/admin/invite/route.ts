@@ -36,12 +36,6 @@ type InviteInput = {
   managerId?: string | null;
 };
 
-type RoleConfiguration = {
-  membershipRole: string;
-  legacyAnalyticsRole: string;
-  hubRole: string;
-};
-
 function normalize(value: unknown) {
   return String(value ?? "")
     .normalize("NFD")
@@ -54,43 +48,12 @@ function jsonError(error: string, status: number) {
   return NextResponse.json({ error }, { status });
 }
 
-function roleConfiguration(role: string): RoleConfiguration {
-  switch (role) {
-    case "Administrador":
-      return {
-        membershipRole: "admin",
-        legacyAnalyticsRole: "admin",
-        hubRole: "administrador",
-      };
-
-    case "Líder de departamento":
-      return {
-        membershipRole: "department_leader",
-        legacyAnalyticsRole: "leader",
-        hubRole: "supervisor",
-      };
-
-    case "Supervisor":
-      return {
-        membershipRole: "supervisor",
-        legacyAnalyticsRole: "supervisor",
-        hubRole: "supervisor",
-      };
-
-    case "Operador":
-      return {
-        membershipRole: "uploader",
-        legacyAnalyticsRole: "uploader",
-        hubRole: "colaborador",
-      };
-
-    default:
-      return {
-        membershipRole: "analyst",
-        legacyAnalyticsRole: "analyst",
-        hubRole: "colaborador",
-      };
-  }
+function roleCode(role: string) {
+  if (role === "Administrador") return "admin";
+  if (role === "Líder de departamento") return "leader";
+  if (role === "Supervisor") return "supervisor";
+  if (role === "Operador") return "uploader";
+  return "analyst";
 }
 
 async function findAuthUserByEmail(
@@ -115,9 +78,7 @@ async function findAuthUserByEmail(
     if (data.users.length < perPage) return null;
   }
 
-  throw new Error(
-    "No se pudo completar la búsqueda de la cuenta en Supabase.",
-  );
+  throw new Error("No se pudo completar la búsqueda de usuarios.");
 }
 
 async function writeAudit(
@@ -144,14 +105,14 @@ export async function POST(request: Request) {
 
   if (!supabaseUrl || !publishableKey) {
     return jsonError(
-      "La conexión corporativa de Supabase está incompleta.",
+      "La conexión independiente de CC Analytics está incompleta.",
       503,
     );
   }
 
   if (!serviceRoleKey) {
     return jsonError(
-      "Falta activar la clave administrativa segura de Supabase en el servidor.",
+      "Falta configurar la clave administrativa segura de CC Analytics.",
       503,
     );
   }
@@ -161,15 +122,10 @@ export async function POST(request: Request) {
     ?.replace(/^Bearer\s+/i, "")
     .trim();
 
-  if (!token) {
-    return jsonError("Sesión administrativa requerida.", 401);
-  }
+  if (!token) return jsonError("Sesión administrativa requerida.", 401);
 
   const authClient = createClient(supabaseUrl, publishableKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 
   const {
@@ -177,53 +133,26 @@ export async function POST(request: Request) {
     error: authError,
   } = await authClient.auth.getUser(token);
 
-  if (authError || !actor) {
-    return jsonError("La sesión no es válida.", 401);
-  }
+  if (authError || !actor) return jsonError("La sesión no es válida.", 401);
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  /*
-   * Durante la transición aceptamos dos formas de reconocer al administrador:
-   * 1. La nueva tabla app_memberships.
-   * 2. Los campos antiguos analytics_enabled / analytics_role en profiles.
-   */
-  const [actorProfileResult, actorMembershipResult] = await Promise.all([
-    admin
-      .from("profiles")
-      .select("id,role,status,analytics_enabled,analytics_role")
-      .eq("id", actor.id)
-      .maybeSingle(),
+  const { data: actorProfile, error: actorError } = await admin
+    .from("analytics_profiles")
+    .select("id,role,status")
+    .eq("id", actor.id)
+    .maybeSingle();
 
-    admin
-      .from("app_memberships")
-      .select("user_id,role_code,active")
-      .eq("user_id", actor.id)
-      .eq("app_code", "cc_analytics")
-      .maybeSingle(),
-  ]);
-
-  const actorProfile = actorProfileResult.data;
-  const actorMembership = actorMembershipResult.data;
-
-  const actorIsMembershipAdmin =
-    actorMembership?.active === true &&
-    ["admin", "administrator"].includes(actorMembership.role_code);
-
-  const actorIsLegacyAdmin =
-    actorProfile?.status === "activo" &&
-    actorProfile.analytics_enabled === true &&
-    (actorProfile.role === "administrador" ||
-      actorProfile.analytics_role === "admin");
-
-  if (!actorIsMembershipAdmin && !actorIsLegacyAdmin) {
+  if (
+    actorError ||
+    !actorProfile ||
+    actorProfile.status !== "activo" ||
+    actorProfile.role !== "admin"
+  ) {
     return jsonError(
-      "Solo un administrador activo puede gestionar accesos.",
+      "Solo un administrador activo de CC Analytics puede crear usuarios.",
       403,
     );
   }
@@ -263,16 +192,16 @@ export async function POST(request: Request) {
     return jsonError("El departamento solicitado no es válido.", 400);
   }
 
-  if (zone.length > 80 || jobProfile.length > 100) {
+  if (!allowedRoles.has(role)) {
     return jsonError(
-      "La zona o el cargo superan la longitud permitida.",
+      "El rol solicitado no tiene acceso a CC Analytics.",
       400,
     );
   }
 
-  if (!allowedRoles.has(role)) {
+  if (zone.length > 80 || jobProfile.length > 100) {
     return jsonError(
-      "El rol solicitado no tiene acceso a CC Analytics.",
+      "La zona o el cargo superan la longitud permitida.",
       400,
     );
   }
@@ -317,59 +246,26 @@ export async function POST(request: Request) {
     );
   }
 
-  const roles = roleConfiguration(role);
+  const targetRole = roleCode(role);
 
-  /*
-   * El superior también se valida con app_memberships.
-   * Se conserva compatibilidad con analytics_role mientras termina la migración.
-   */
   if (managerId) {
-    const [managerProfileResult, managerMembershipResult] = await Promise.all([
-      admin
-        .from("profiles")
-        .select(
-          "id,department,zone,status,analytics_enabled,analytics_role",
-        )
-        .eq("id", managerId)
-        .maybeSingle(),
-
-      admin
-        .from("app_memberships")
-        .select("user_id,role_code,department,zone,active")
-        .eq("user_id", managerId)
-        .eq("app_code", "cc_analytics")
-        .maybeSingle(),
-    ]);
-
-    const manager = managerProfileResult.data;
-    const managerMembership = managerMembershipResult.data;
-
-    const managerRole =
-      managerMembership?.role_code || manager?.analytics_role || "";
-
-    const managerActive =
-      managerMembership?.active === true ||
-      (manager?.status === "activo" &&
-        manager?.analytics_enabled === true);
-
-    const managerDepartment =
-      managerMembership?.department || manager?.department || "";
-
-    const managerZone =
-      managerMembership?.zone || manager?.zone || "";
+    const { data: manager, error: managerError } = await admin
+      .from("analytics_profiles")
+      .select("id,department,zone,status,role")
+      .eq("id", managerId)
+      .maybeSingle();
 
     const managerRoleAllowed =
-      role === "Supervisor"
-        ? ["department_leader", "leader", "manager"].includes(
-            managerRole,
-          )
-        : managerRole === "supervisor";
+      targetRole === "supervisor"
+        ? manager?.role === "leader"
+        : manager?.role === "supervisor";
 
     if (
+      managerError ||
       !manager ||
-      !managerActive ||
-      managerDepartment !== department ||
-      !(managerZone === zone || managerZone === "Nacional") ||
+      manager.status !== "activo" ||
+      manager.department !== department ||
+      !(manager.zone === zone || manager.zone === "Nacional") ||
       !managerRoleAllowed
     ) {
       return jsonError(
@@ -380,42 +276,34 @@ export async function POST(request: Request) {
   }
 
   const since = new Date(Date.now() - 15 * 60_000).toISOString();
-
   const { count, error: limitError } = await admin
     .from("analytics_audit_log")
     .select("id", { count: "exact", head: true })
     .eq("actor_id", actor.id)
-    .in("action", [
-      "user_invite_requested",
-      "analytics_access_requested",
-    ])
+    .eq("action", "user_invite_requested")
     .gte("created_at", since);
 
   if (limitError) {
     return jsonError(
-      "La migración corporativa de auditoría todavía no está instalada.",
+      "La base independiente de CC Analytics todavía no está instalada.",
       503,
     );
   }
 
   if ((count || 0) >= 10) {
     return jsonError(
-      "Se alcanzó el límite de solicitudes. Intenta nuevamente más tarde.",
+      "Se alcanzó el límite de invitaciones. Intenta nuevamente más tarde.",
       429,
     );
   }
 
   await writeAudit(admin, {
     actor_id: actor.id,
-    action: "analytics_access_requested",
-    entity_type: "profile",
+    action: "user_invite_requested",
+    entity_type: "analytics_profile",
     department,
     zone,
-    metadata: {
-      email,
-      role,
-      job_profile: jobProfile,
-    },
+    metadata: { email, role, job_profile: jobProfile },
   });
 
   let targetUser: User | null = null;
@@ -427,18 +315,13 @@ export async function POST(request: Request) {
     return jsonError(
       error instanceof Error
         ? error.message
-        : "No se pudo buscar la cuenta en Supabase.",
+        : "No se pudo buscar la cuenta en CC Analytics.",
       502,
     );
   }
 
-  /*
-   * Si la identidad ya existe, se reutiliza.
-   * Si no existe, se invita como antes.
-   */
   if (!targetUser) {
     const origin = new URL(request.url).origin;
-
     const { data: invitation, error: invitationError } =
       await admin.auth.admin.inviteUserByEmail(email, {
         redirectTo: origin,
@@ -448,6 +331,7 @@ export async function POST(request: Request) {
           job_title: jobProfile,
           zone,
           reports_to: managerId,
+          role: targetRole,
         },
       });
 
@@ -455,7 +339,7 @@ export async function POST(request: Request) {
       await writeAudit(admin, {
         actor_id: actor.id,
         action: "user_invite_failed",
-        entity_type: "profile",
+        entity_type: "analytics_profile",
         department,
         zone,
         metadata: {
@@ -477,142 +361,57 @@ export async function POST(request: Request) {
     identityCreated = true;
   }
 
-  const { data: existingProfile, error: existingProfileError } =
-    await admin
-      .from("profiles")
-      .select(
-        "id,status,full_name,email,department,job_title,zone,reports_to,role",
-      )
-      .eq("id", targetUser.id)
-      .maybeSingle();
-
-  if (existingProfileError) {
-    if (identityCreated) {
-      await admin.auth.admin.deleteUser(targetUser.id);
-    }
-
-    return jsonError(
-      "No se pudo revisar el perfil corporativo existente.",
-      502,
-    );
-  }
-
-  if (existingProfile && existingProfile.status !== "activo") {
-    if (identityCreated) {
-      await admin.auth.admin.deleteUser(targetUser.id);
-    }
-
-    return jsonError(
-      "La cuenta existe, pero su perfil de CC HUB está inactivo. Reactívalo antes de conceder acceso.",
-      409,
-    );
-  }
-
   const profilePayload = {
+    id: targetUser.id,
     full_name: name,
     email,
     department,
     job_title: jobProfile,
     zone,
     reports_to:
-      role === "Administrador" || role === "Líder de departamento"
+      targetRole === "admin" || targetRole === "leader"
         ? null
         : managerId,
-    role: roles.hubRole,
-    analytics_enabled: true,
-    analytics_role: roles.legacyAnalyticsRole,
+    role: targetRole,
+    status: "activo",
     updated_at: new Date().toISOString(),
   };
 
-  const profileResult = existingProfile
-    ? await admin
-        .from("profiles")
-        .update(profilePayload)
-        .eq("id", targetUser.id)
-    : await admin.from("profiles").insert({
-        id: targetUser.id,
-        ...profilePayload,
-        status: "activo",
-      });
+  const { error: profileError } = await admin
+    .from("analytics_profiles")
+    .upsert(profilePayload, { onConflict: "id" });
 
-  if (profileResult.error) {
+  if (profileError) {
     if (identityCreated) {
       await admin.auth.admin.deleteUser(targetUser.id);
     }
 
     await writeAudit(admin, {
       actor_id: actor.id,
-      action: "analytics_profile_failed",
-      entity_type: "profile",
+      action: "user_profile_failed",
+      entity_type: "analytics_profile",
       entity_id: targetUser.id,
       department,
       zone,
       metadata: {
         email,
-        reason: profileResult.error.message,
+        reason: profileError.message,
         identity_created: identityCreated,
       },
     });
 
     return jsonError(
       identityCreated
-        ? "No se pudo crear el perfil corporativo. La invitación fue revertida."
-        : "La cuenta existe, pero no se pudo actualizar su perfil corporativo.",
-      502,
-    );
-  }
-
-  const { error: membershipError } = await admin
-    .from("app_memberships")
-    .upsert(
-      {
-        user_id: targetUser.id,
-        app_code: "cc_analytics",
-        role_code: roles.membershipRole,
-        profile_name: role,
-        department,
-        zone,
-        active: true,
-        granted_by: actor.id,
-        granted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "user_id,app_code",
-      },
-    );
-
-  if (membershipError) {
-    if (identityCreated) {
-      await admin.auth.admin.deleteUser(targetUser.id);
-    }
-
-    await writeAudit(admin, {
-      actor_id: actor.id,
-      action: "analytics_access_failed",
-      entity_type: "profile",
-      entity_id: targetUser.id,
-      department,
-      zone,
-      metadata: {
-        email,
-        reason: membershipError.message,
-        identity_created: identityCreated,
-      },
-    });
-
-    return jsonError(
-      "No se pudo guardar el acceso a CC Analytics.",
+        ? "No se pudo crear el perfil de CC Analytics. La invitación fue revertida."
+        : "La cuenta existe en CC Analytics, pero no se pudo actualizar su perfil.",
       502,
     );
   }
 
   await writeAudit(admin, {
     actor_id: actor.id,
-    action: identityCreated
-      ? "user_invited"
-      : "analytics_access_granted",
-    entity_type: "profile",
+    action: identityCreated ? "user_invited" : "user_access_updated",
+    entity_type: "analytics_profile",
     entity_id: targetUser.id,
     department,
     zone,
@@ -627,8 +426,8 @@ export async function POST(request: Request) {
   return NextResponse.json({
     accountReused: !identityCreated,
     message: identityCreated
-      ? "La cuenta fue creada y recibió acceso a CC Analytics."
-      : "La cuenta existente de CC HUB recibió acceso a CC Analytics.",
+      ? "Se creó una cuenta independiente de CC Analytics y se envió la invitación."
+      : "Se actualizó la cuenta existente de CC Analytics.",
     profile: {
       id: targetUser.id,
       name,
@@ -638,7 +437,7 @@ export async function POST(request: Request) {
       zone,
       role,
       managerId:
-        role === "Administrador" || role === "Líder de departamento"
+        targetRole === "admin" || targetRole === "leader"
           ? null
           : managerId,
       initials: name
