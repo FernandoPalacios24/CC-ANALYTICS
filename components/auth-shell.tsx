@@ -27,6 +27,9 @@ import {
   RecoveryScreen,
 } from "@/components/auth-screens";
 
+// Las cargas comerciales mantienen seller_profile_id: null y resuelven
+// supervisor_profile_id: únicamente contra perfiles activos de CC Analytics.
+
 export function AuthShell() {
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
