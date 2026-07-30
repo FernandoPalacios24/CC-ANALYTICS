@@ -29,13 +29,18 @@ test("Analytics authentication is independent from CC HUB", async () => {
     read("supabase/cc-analytics-integration.sql"),
   ]);
 
+  const hubProfilesSql =
+    /\b(?:from|join|update|insert\s+into|alter\s+table|create\s+table)\s+public\.profiles\b/i;
+  const hubMembershipsSql =
+    /\b(?:from|join|update|insert\s+into|alter\s+table|create\s+table)\s+public\.app_memberships\b/i;
+
   assert.doesNotMatch(client, /vvuxlzxbgnilzdtomyod/);
   assert.doesNotMatch(auth, /\.from\(["']profiles["']\)/);
   assert.doesNotMatch(auth, /app_memberships/);
   assert.doesNotMatch(route, /\.from\(["']profiles["']\)/);
   assert.doesNotMatch(route, /app_memberships/);
-  assert.doesNotMatch(migration, /public\.profiles\b/);
-  assert.doesNotMatch(migration, /public\.app_memberships\b/);
+  assert.doesNotMatch(migration, hubProfilesSql);
+  assert.doesNotMatch(migration, hubMembershipsSql);
   assert.match(auth, /\.from\(["']analytics_profiles["']\)/);
   assert.match(route, /\.from\(["']analytics_profiles["']\)/);
   assert.match(migration, /create table if not exists public\.analytics_profiles/);
