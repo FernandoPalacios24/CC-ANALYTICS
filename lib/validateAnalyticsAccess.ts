@@ -3,12 +3,15 @@
 import { supabase } from "./supabase-client";
 
 export type AnalyticsAccess = {
-  app_code: string;
-  role_code: string;
-  profile_name: string | null;
-  department: string | null;
-  zone: string | null;
-  active: boolean;
+  id: string;
+  full_name: string;
+  email: string;
+  department: string;
+  job_title: string;
+  zone: string;
+  role: "admin" | "leader" | "supervisor" | "analyst" | "uploader";
+  reports_to: string | null;
+  status: "activo" | "inactivo" | "suspendido";
 };
 
 export async function validateAnalyticsAccess(): Promise<AnalyticsAccess> {
@@ -18,43 +21,33 @@ export async function validateAnalyticsAccess(): Promise<AnalyticsAccess> {
   } = await supabase.auth.getUser();
 
   if (userError) {
-    throw new Error(
-      `No se pudo validar la sesión: ${userError.message}`
-    );
+    throw new Error(`No se pudo validar la sesión: ${userError.message}`);
   }
 
   if (!user) {
     throw new Error("No se encontró una sesión válida.");
   }
 
-  const { data: access, error: accessError } = await supabase
-    .from("app_memberships")
-    .select(`
-      app_code,
-      role_code,
-      profile_name,
-      department,
-      zone,
-      active
-    `)
-    .eq("user_id", user.id)
-    .eq("app_code", "cc_analytics")
-    .eq("active", true)
+  const { data: profile, error: profileError } = await supabase
+    .from("analytics_profiles")
+    .select(
+      "id,full_name,email,department,job_title,zone,role,reports_to,status",
+    )
+    .eq("id", user.id)
     .maybeSingle();
 
-  if (accessError) {
+  if (profileError) {
     throw new Error(
-      `No se pudo verificar el acceso a CC Analytics: ${accessError.message}`
+      `No se pudo verificar el acceso a CC Analytics: ${profileError.message}`,
     );
   }
 
-  if (!access) {
+  if (!profile || profile.status !== "activo") {
     await supabase.auth.signOut();
-
     throw new Error(
-      "Tu cuenta existe, pero no tiene acceso autorizado a CC Analytics."
+      "Tu cuenta de CC Analytics está inactiva o pendiente de aprobación.",
     );
   }
 
-  return access as AnalyticsAccess;
+  return profile as AnalyticsAccess;
 }
