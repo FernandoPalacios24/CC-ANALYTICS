@@ -46,7 +46,7 @@ test("Analytics authentication is independent from CC HUB", async () => {
   assert.match(migration, /create table if not exists public\.analytics_profiles/);
 });
 
-test("administrative invitations stay on the server and are audited", async () => {
+test("administrative user creation stays on the server and is audited", async () => {
   const [client, route, migration] = await Promise.all([
     read("lib/supabase-client.ts"),
     read("app/api/admin/invite/route.ts"),
@@ -55,8 +55,9 @@ test("administrative invitations stay on the server and are audited", async () =
 
   assert.doesNotMatch(client, /createSignupClient/);
   assert.match(route, /SUPABASE_SERVICE_ROLE_KEY/);
-  assert.match(route, /inviteUserByEmail/);
-  assert.match(route, /user_invite_requested/);
+  assert.match(route, /admin\.auth\.admin\.createUser/);
+  assert.match(route, /email_confirm:\s*true/);
+  assert.match(route, /user_create_requested/);
   assert.match(migration, /create table if not exists public\.analytics_audit_log/);
 });
 
