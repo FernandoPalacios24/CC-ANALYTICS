@@ -13,7 +13,8 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
+    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
+    "users:direct": "python3 scripts/convert-user-invite-to-direct-create.py"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
