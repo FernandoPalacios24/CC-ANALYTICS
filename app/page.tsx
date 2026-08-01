@@ -1,5 +1,5 @@
-import { AuthShell } from "@/components/auth-shell";
+import { AnalyticsRoot } from "@/components/analytics-root";
 
 export default function Home() {
-  return <AuthShell />;
+  return <AnalyticsRoot />;
 }
