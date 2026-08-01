@@ -6,6 +6,7 @@ const hub = await readFile("components/sales-data-hub.tsx", "utf8");
 const detector = await readFile("lib/sales-import-detection.ts", "utf8");
 const root = await readFile("components/analytics-root.tsx", "utf8");
 const migration = await readFile("supabase/cc-analytics-sales-entry.sql", "utf8");
+const lintConfig = await readFile("eslint.config.mjs", "utf8");
 
 test("sales entry hub includes roster, import, manual, announced and report workflows", () => {
   for (const marker of [
@@ -43,4 +44,8 @@ test("database migration preserves seller history and announced sales", () => {
   assert.match(migration, /analytics_retire_seller/);
   assert.match(migration, /salida_pendiente/);
   assert.match(migration, /seller_id uuid/);
+});
+
+test("lint configuration supports intentional Supabase loading effects", () => {
+  assert.match(lintConfig, /react-hooks\/set-state-in-effect/);
 });
