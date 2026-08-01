@@ -69,6 +69,49 @@ export function AuthShell() {
   }, []);
 
   useEffect(() => {
+    const replacements: Array<[string, string]> = [
+      ["Invitar nuevo usuario", "Crear nuevo usuario"],
+      ["Invitar usuario", "Crear usuario"],
+      ["Enviar invitación segura", "Crear usuario"],
+      ["Enviando invitación...", "Creando usuario..."],
+      ["Invitación enviada", "Usuario creado"],
+      ["No se pudo invitar", "No se pudo crear"],
+      ["Alta compartida", "Alta directa"],
+    ];
+
+    const replaceUiText = () => {
+      const root = document.body;
+      if (!root) return;
+
+      const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT,
+      );
+      let node = walker.nextNode();
+
+      while (node) {
+        const current = node.nodeValue || "";
+        let updated = current;
+        for (const [from, to] of replacements) {
+          updated = updated.replaceAll(from, to);
+        }
+        if (updated !== current) node.nodeValue = updated;
+        node = walker.nextNode();
+      }
+    };
+
+    replaceUiText();
+    const observer = new MutationObserver(replaceUiText);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     if (!supabaseConfigured || !session) return;
     let active = true;
 
@@ -178,13 +221,41 @@ export function AuthShell() {
   }
 
   async function inviteUser(input: NewUserInput) {
+    const password = window.prompt(
+      `Define la contraseña temporal para ${input.email}.\n\nDebe tener al menos 10 caracteres, una mayúscula, una minúscula y un número.`,
+    );
+
+    if (password === null) {
+      return { error: "Creación cancelada." };
+    }
+
+    if (
+      password.length < 10 ||
+      !/[A-Z]/.test(password) ||
+      !/[a-z]/.test(password) ||
+      !/[0-9]/.test(password)
+    ) {
+      return {
+        error:
+          "La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula y un número.",
+      };
+    }
+
+    const confirmation = window.prompt(
+      `Confirma la contraseña para ${input.email}.`,
+    );
+
+    if (confirmation !== password) {
+      return { error: "Las contraseñas no coinciden." };
+    }
+
     const response = await fetch("/api/admin/invite", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, password }),
     });
 
     const result = (await response.json()) as {
