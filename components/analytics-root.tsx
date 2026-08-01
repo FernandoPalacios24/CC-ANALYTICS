@@ -108,7 +108,7 @@ export function AnalyticsRoot() {
     const detect = () => {
       const heading = document.querySelector("header h1")?.textContent?.trim();
       setInsideReports(heading === "Reportes");
-      setNavHost(document.querySelector("aside nav"));
+      setNavHost(document.querySelector<HTMLElement>("aside nav"));
     };
     detect();
     const observer = new MutationObserver(detect);
