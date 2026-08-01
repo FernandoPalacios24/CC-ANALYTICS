@@ -1,13 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MonitorUp, Presentation, Radio } from "lucide-react";
+import { createPortal } from "react-dom";
+import {
+  FileSpreadsheet,
+  MonitorUp,
+  Presentation,
+  Radio,
+  X,
+} from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
+import { SalesDataHub } from "@/components/sales-data-hub";
+import type { Profile } from "@/components/analytics-app-v2";
+import {
+  analyticsProfileColumns,
+  mapAnalyticsProfile,
+  type AnalyticsProfileRow,
+} from "@/lib/analytics-profile";
 import { supabase, supabaseConfigured } from "@/lib/supabase-client";
 
 export function AnalyticsRoot() {
-  const [authorized, setAuthorized] = useState(false);
+  const [presentationAuthorized, setPresentationAuthorized] = useState(false);
+  const [salesAuthorized, setSalesAuthorized] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [insideReports, setInsideReports] = useState(false);
+  const [salesOpen, setSalesOpen] = useState(false);
+  const [navHost, setNavHost] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -16,18 +35,61 @@ export function AnalyticsRoot() {
     async function checkAccess() {
       const { data } = await supabase.auth.getSession();
       if (!active || !data.session) {
-        setAuthorized(false);
+        setPresentationAuthorized(false);
+        setSalesAuthorized(false);
+        setProfile(null);
+        setProfiles([]);
+        setSalesOpen(false);
         return;
       }
-      const { data: profile } = await supabase
+
+      const { data: current } = await supabase
         .from("analytics_profiles")
-        .select("role,status")
+        .select(analyticsProfileColumns)
         .eq("id", data.session.user.id)
         .maybeSingle();
+      if (!active || !current) return;
+
+      let mapped: Profile;
+      try {
+        mapped = mapAnalyticsProfile(current as AnalyticsProfileRow);
+      } catch {
+        return;
+      }
+
+      const { data: directory } = await supabase
+        .from("analytics_profiles")
+        .select(analyticsProfileColumns)
+        .order("full_name");
       if (!active) return;
-      setAuthorized(
-        profile?.status === "activo" &&
-          (profile?.role === "leader" || profile?.role === "admin"),
+
+      const mappedDirectory = (directory || []).flatMap((row) => {
+        try {
+          return [mapAnalyticsProfile(row as AnalyticsProfileRow)];
+        } catch {
+          return [];
+        }
+      });
+
+      setProfile(mapped);
+      setProfiles(
+        mappedDirectory.some((item) => item.id === mapped.id)
+          ? mappedDirectory
+          : [mapped, ...mappedDirectory],
+      );
+      setPresentationAuthorized(
+        mapped.active &&
+          (mapped.role === "Líder de departamento" ||
+            mapped.role === "Administrador"),
+      );
+      setSalesAuthorized(
+        mapped.active &&
+          [
+            "Administrador",
+            "Líder de departamento",
+            "Supervisor",
+            "Operador",
+          ].includes(mapped.role),
       );
     }
 
@@ -46,6 +108,7 @@ export function AnalyticsRoot() {
     const detect = () => {
       const heading = document.querySelector("header h1")?.textContent?.trim();
       setInsideReports(heading === "Reportes");
+      setNavHost(document.querySelector("aside nav"));
     };
     detect();
     const observer = new MutationObserver(detect);
@@ -70,7 +133,55 @@ export function AnalyticsRoot() {
   return (
     <>
       <AuthShell />
-      {authorized && insideReports && (
+
+      {salesAuthorized && navHost &&
+        createPortal(
+          <button
+            title="Ingreso de ventas"
+            onClick={() => setSalesOpen(true)}
+            className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+              salesOpen
+                ? "bg-gradient-to-r from-emerald-600/20 to-cyan-500/[.04] text-emerald-200 shadow-[inset_2px_0_0_#34d399]"
+                : "text-zinc-500 hover:bg-white/[.035] hover:text-zinc-300"
+            }`}
+          >
+            <FileSpreadsheet size={17} />
+            <span className="truncate text-[11px] font-semibold">
+              Ingreso de ventas
+            </span>
+            {salesOpen && (
+              <span className="ml-auto h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            )}
+          </button>,
+          navHost,
+        )}
+
+      {salesOpen && profile && (
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-[#08080b]">
+          <header className="sticky top-0 z-20 flex min-h-[74px] items-center justify-between border-b border-white/[.07] bg-[#09090d]/95 px-4 backdrop-blur-xl sm:px-6">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[.18em] text-emerald-400/80">
+                Cable Color · {profile.department} · {profile.zone}
+              </p>
+              <h1 className="mt-1 text-lg font-black text-white">
+                Ingreso de ventas
+              </h1>
+            </div>
+            <button
+              aria-label="Cerrar ingreso de ventas"
+              onClick={() => setSalesOpen(false)}
+              className="rounded-xl border border-white/[.08] bg-white/[.03] p-3 text-zinc-400 hover:text-white"
+            >
+              <X size={19} />
+            </button>
+          </header>
+          <main className="mx-auto max-w-[1800px] p-4 sm:p-6">
+            <SalesDataHub profile={profile} profiles={profiles} />
+          </main>
+        </div>
+      )}
+
+      {presentationAuthorized && insideReports && !salesOpen && (
         <aside className="fixed bottom-6 right-6 z-[70] w-[330px] overflow-hidden rounded-2xl border border-purple-400/25 bg-[#101016]/95 shadow-[0_25px_80px_rgba(0,0,0,.55),0_0_45px_rgba(168,85,247,.14)] backdrop-blur-xl">
           <div className="flex items-center gap-3 border-b border-white/[.07] p-4">
             <span className="grid h-11 w-11 place-items-center rounded-xl bg-purple-500/10 text-purple-300">
@@ -78,7 +189,9 @@ export function AnalyticsRoot() {
             </span>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-black text-white">Presentación en vivo</h2>
+                <h2 className="text-sm font-black text-white">
+                  Presentación en vivo
+                </h2>
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[8px] font-black text-emerald-300">
                   <Radio size={9} /> LIVE
                 </span>
