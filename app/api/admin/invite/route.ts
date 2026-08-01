@@ -29,6 +29,7 @@ const allowedDepartments = new Set([
 type InviteInput = {
   name?: string;
   email?: string;
+  password?: string;
   department?: string;
   jobProfile?: string;
   zone?: string;
@@ -167,6 +168,7 @@ export async function POST(request: Request) {
 
   const name = String(input.name ?? "").trim();
   const email = String(input.email ?? "").trim().toLowerCase();
+  const password = String(input.password ?? "");
   let department = String(input.department ?? "").trim();
   const jobProfile = String(input.jobProfile ?? "").trim();
   let zone = String(input.zone ?? "").trim();
@@ -179,6 +181,18 @@ export async function POST(request: Request) {
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return jsonError("Ingresa un correo válido.", 400);
+  }
+
+  if (
+    password.length < 10 ||
+    !/[A-Z]/.test(password) ||
+    !/[a-z]/.test(password) ||
+    !/[0-9]/.test(password)
+  ) {
+    return jsonError(
+      "La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula y un número.",
+      400,
+    );
   }
 
   if (!department || !zone || !jobProfile) {
@@ -280,7 +294,7 @@ export async function POST(request: Request) {
     .from("analytics_audit_log")
     .select("id", { count: "exact", head: true })
     .eq("actor_id", actor.id)
-    .eq("action", "user_invite_requested")
+    .eq("action", "user_create_requested")
     .gte("created_at", since);
 
   if (limitError) {
@@ -292,14 +306,14 @@ export async function POST(request: Request) {
 
   if ((count || 0) >= 10) {
     return jsonError(
-      "Se alcanzó el límite de invitaciones. Intenta nuevamente más tarde.",
+      "Se alcanzó el límite de creación de usuarios. Intenta nuevamente más tarde.",
       429,
     );
   }
 
   await writeAudit(admin, {
     actor_id: actor.id,
-    action: "user_invite_requested",
+    action: "user_create_requested",
     entity_type: "analytics_profile",
     department,
     zone,
@@ -320,45 +334,73 @@ export async function POST(request: Request) {
     );
   }
 
+  const userMetadata = {
+    full_name: name,
+    department,
+    job_title: jobProfile,
+    zone,
+    reports_to: managerId,
+    role: targetRole,
+  };
+
   if (!targetUser) {
-    const origin = new URL(request.url).origin;
-    const { data: invitation, error: invitationError } =
-      await admin.auth.admin.inviteUserByEmail(email, {
-        redirectTo: origin,
-        data: {
-          full_name: name,
-          department,
-          job_title: jobProfile,
-          zone,
-          reports_to: managerId,
-          role: targetRole,
-        },
+    const { data: created, error: createError } =
+      await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: userMetadata,
       });
 
-    if (invitationError || !invitation.user) {
+    if (createError || !created.user) {
       await writeAudit(admin, {
         actor_id: actor.id,
-        action: "user_invite_failed",
+        action: "user_create_failed",
         entity_type: "analytics_profile",
         department,
         zone,
         metadata: {
           email,
-          reason:
-            invitationError?.message ||
-            "Supabase no devolvió el usuario.",
+          reason: createError?.message || "Supabase no devolvió el usuario.",
         },
       });
 
       return jsonError(
-        invitationError?.message ||
-          "Supabase no pudo enviar la invitación.",
+        createError?.message || "Supabase no pudo crear el usuario.",
         502,
       );
     }
 
-    targetUser = invitation.user;
+    targetUser = created.user;
     identityCreated = true;
+  } else {
+    const { data: updated, error: updateError } =
+      await admin.auth.admin.updateUserById(targetUser.id, {
+        password,
+        user_metadata: userMetadata,
+      });
+
+    if (updateError || !updated.user) {
+      await writeAudit(admin, {
+        actor_id: actor.id,
+        action: "user_create_failed",
+        entity_type: "analytics_profile",
+        entity_id: targetUser.id,
+        department,
+        zone,
+        metadata: {
+          email,
+          reason: updateError?.message || "No se pudo actualizar la cuenta.",
+        },
+      });
+
+      return jsonError(
+        updateError?.message || "No se pudieron actualizar las credenciales.",
+        502,
+      );
+    }
+
+    targetUser = updated.user;
   }
 
   const profilePayload = {
@@ -402,7 +444,7 @@ export async function POST(request: Request) {
 
     return jsonError(
       identityCreated
-        ? "No se pudo crear el perfil de CC Analytics. La invitación fue revertida."
+        ? "No se pudo crear el perfil de CC Analytics. La cuenta fue revertida."
         : "La cuenta existe en CC Analytics, pero no se pudo actualizar su perfil.",
       502,
     );
@@ -410,7 +452,7 @@ export async function POST(request: Request) {
 
   await writeAudit(admin, {
     actor_id: actor.id,
-    action: identityCreated ? "user_invited" : "user_access_updated",
+    action: identityCreated ? "user_created" : "user_credentials_updated",
     entity_type: "analytics_profile",
     entity_id: targetUser.id,
     department,
@@ -426,8 +468,8 @@ export async function POST(request: Request) {
   return NextResponse.json({
     accountReused: !identityCreated,
     message: identityCreated
-      ? "Se creó una cuenta independiente de CC Analytics y se envió la invitación."
-      : "Se actualizó la cuenta existente de CC Analytics.",
+      ? "Usuario creado. Ya puede ingresar con el correo y la contraseña asignados."
+      : "La cuenta existente, su contraseña y sus permisos fueron actualizados.",
     profile: {
       id: targetUser.id,
       name,
