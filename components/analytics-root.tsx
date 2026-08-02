@@ -10,7 +10,8 @@ import {
   X,
 } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
-import { SalesDataHub } from "@/components/sales-data-hub";
+import { LiveSalesAreaDashboard } from "@/components/live-sales-area-dashboard";
+import { SalesDataHubV2 } from "@/components/sales-data-hub-v2";
 import type { Profile } from "@/components/analytics-app-v2";
 import {
   analyticsProfileColumns,
@@ -27,6 +28,9 @@ export function AnalyticsRoot() {
   const [insideReports, setInsideReports] = useState(false);
   const [salesOpen, setSalesOpen] = useState(false);
   const [navHost, setNavHost] = useState<HTMLElement | null>(null);
+  const [currentHeading, setCurrentHeading] = useState("");
+  const [liveDashboardHost, setLiveDashboardHost] =
+    useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -106,7 +110,8 @@ export function AnalyticsRoot() {
 
   useEffect(() => {
     const detect = () => {
-      const heading = document.querySelector("header h1")?.textContent?.trim();
+      const heading = document.querySelector("header h1")?.textContent?.trim() || "";
+      setCurrentHeading(heading);
       setInsideReports(heading === "Reportes");
       setNavHost(document.querySelector<HTMLElement>("aside nav"));
     };
@@ -119,6 +124,40 @@ export function AnalyticsRoot() {
     });
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const existingHost = document.getElementById("cc-live-sales-host");
+    const showRealSalesDashboard =
+      currentHeading === "Dashboard de mi área" &&
+      profile?.department === "Ventas Digitales";
+
+    if (!showRealSalesDashboard) {
+      existingHost?.remove();
+      setLiveDashboardHost(null);
+      return;
+    }
+
+    const main = document.querySelector<HTMLElement>("main");
+    if (!main) return;
+
+    const legacy = main.querySelector<HTMLElement>(":scope > .animate-in");
+    const host =
+      existingHost ||
+      Object.assign(document.createElement("div"), {
+        id: "cc-live-sales-host",
+      });
+
+    if (!existingHost) {
+      main.insertBefore(host, legacy || main.querySelector("footer"));
+    }
+    if (legacy) legacy.style.display = "none";
+    setLiveDashboardHost(host);
+
+    return () => {
+      if (legacy) legacy.style.display = "";
+      host.remove();
+    };
+  }, [currentHeading, profile?.department]);
 
   function openPresentation() {
     const popup = window.open(
@@ -133,6 +172,12 @@ export function AnalyticsRoot() {
   return (
     <>
       <AuthShell />
+
+      {profile && liveDashboardHost && !salesOpen &&
+        createPortal(
+          <LiveSalesAreaDashboard profile={profile} />,
+          liveDashboardHost,
+        )}
 
       {salesAuthorized && navHost &&
         createPortal(
@@ -176,7 +221,7 @@ export function AnalyticsRoot() {
             </button>
           </header>
           <main className="mx-auto max-w-[1800px] p-4 sm:p-6">
-            <SalesDataHub profile={profile} profiles={profiles} />
+            <SalesDataHubV2 profile={profile} profiles={profiles} />
           </main>
         </div>
       )}
