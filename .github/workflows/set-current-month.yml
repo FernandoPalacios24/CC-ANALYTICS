@@ -1,0 +1,60 @@
+name: Aplicar mes vigente en filtros
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/set-current-month.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-current-month:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Actualizar selector de mes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("components/analytics-app-v2.tsx")
+          text = path.read_text(encoding="utf-8")
+
+          marker = 'type Filters = { month: string; region: string; city: string; channel: string };\n'
+          helper = '''type Filters = { month: string; region: string; city: string; channel: string };\n\nfunction currentMonthLabel() {\n  return new Intl.DateTimeFormat("es-HN", {\n    month: "long",\n    year: "numeric",\n  })\n    .format(new Date())\n    .replace(/^./, (value) => value.toUpperCase());\n}\n\nfunction monthFilterOptions(total = 24) {\n  const now = new Date();\n  return Array.from({ length: total }, (_, index) => {\n    const date = new Date(now.getFullYear(), now.getMonth() - index, 1);\n    return new Intl.DateTimeFormat("es-HN", {\n      month: "long",\n      year: "numeric",\n    })\n      .format(date)\n      .replace(/^./, (value) => value.toUpperCase());\n  });\n}\n'''
+
+          if 'function currentMonthLabel()' not in text:
+              if marker not in text:
+                  raise SystemExit('No se encontró el punto de inserción para los filtros')
+              text = text.replace(marker, helper, 1)
+
+          old_options = '{ key: "month", values: ["Julio 2026", "Junio 2026", "Mayo 2026"] },'
+          new_options = '{ key: "month", values: monthFilterOptions() },'
+          if old_options in text:
+              text = text.replace(old_options, new_options, 1)
+          elif new_options not in text:
+              raise SystemExit('No se encontró la lista fija de meses')
+
+          old_initial = '    month: "Julio 2026",'
+          new_initial = '    month: currentMonthLabel(),'
+          if old_initial in text:
+              text = text.replace(old_initial, new_initial, 1)
+          elif new_initial not in text:
+              raise SystemExit('No se encontró el mes inicial fijo')
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Confirmar cambio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add components/analytics-app-v2.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "Usar automáticamente el mes vigente en los filtros"
+          git push
