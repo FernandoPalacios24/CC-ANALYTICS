@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ElementType,
+} from "react";
 import {
   BarChart3,
   CircleDollarSign,
@@ -115,6 +122,15 @@ function readFilters(): DashboardFilters {
   };
 }
 
+function sameFilters(a: DashboardFilters, b: DashboardFilters) {
+  return (
+    a.month === b.month &&
+    a.region === b.region &&
+    a.city === b.city &&
+    a.channel === b.channel
+  );
+}
+
 function useVisibleDashboardFilters() {
   const [filters, setFilters] = useState<DashboardFilters>(() => ({
     month: currentMonthLabel(),
@@ -124,14 +140,18 @@ function useVisibleDashboardFilters() {
   }));
 
   useEffect(() => {
-    const sync = () => setFilters(readFilters());
+    const sync = () => {
+      const next = readFilters();
+      setFilters((current) => (sameFilters(current, next) ? current : next));
+    };
+
     sync();
+    const delayedSync = window.setTimeout(sync, 250);
     document.addEventListener("change", sync, true);
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true });
+
     return () => {
+      window.clearTimeout(delayedSync);
       document.removeEventListener("change", sync, true);
-      observer.disconnect();
     };
   }, []);
 
@@ -161,6 +181,10 @@ function percentageChange(current: number, previous: number) {
   return ((current - previous) / previous) * 100;
 }
 
+function wait(milliseconds: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 function Kpi({
   label,
   value,
@@ -170,7 +194,7 @@ function Kpi({
   label: string;
   value: string;
   change: number;
-  icon: React.ElementType;
+  icon: ElementType;
 }) {
   const positive = change >= 0;
   return (
@@ -209,62 +233,91 @@ export function LiveSalesAreaDashboard({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const requestSequence = useRef(0);
+  const lastAutomaticRun = useRef(0);
 
-  const load = useCallback(async () => {
-    const range = monthRange(filters.month);
-    setError("");
+  const load = useCallback(
+    async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastAutomaticRun.current < 1_200) return;
+      if (!force) lastAutomaticRun.current = now;
 
-    let salesQuery = supabase
-      .from("analytics_sales")
-      .select(
-        "id,seller_id,seller_name,sale_date,amount_billed,sale_units,city,medium,zone",
-      )
-      .gte("sale_date", range.previousStart)
-      .lt("sale_date", range.end)
-      .order("sale_date", { ascending: true })
-      .limit(50000);
+      const requestId = ++requestSequence.current;
+      const range = monthRange(filters.month);
+      setLoading(true);
 
-    let announcedQuery = supabase
-      .from("analytics_announced_sales")
-      .select("id,status,announced_at,sale_units,city,zone")
-      .gte("announced_at", `${range.start}T00:00:00`)
-      .lt("announced_at", `${range.end}T00:00:00`)
-      .limit(30000);
+      const runQueries = async () => {
+        let salesQuery = supabase
+          .from("analytics_sales")
+          .select(
+            "id,seller_id,seller_name,sale_date,amount_billed,sale_units,city,medium,zone",
+          )
+          .gte("sale_date", range.previousStart)
+          .lt("sale_date", range.end)
+          .order("sale_date", { ascending: true })
+          .limit(50_000);
 
-    if (filters.region !== "Todas las zonas") {
-      salesQuery = salesQuery.eq("zone", filters.region);
-      announcedQuery = announcedQuery.eq("zone", filters.region);
-    }
-    if (filters.city !== "Todas las ciudades") {
-      salesQuery = salesQuery.eq("city", filters.city);
-      announcedQuery = announcedQuery.eq("city", filters.city);
-    }
-    if (filters.channel !== "Todos los canales") {
-      salesQuery = salesQuery.eq("medium", filters.channel);
-    }
+        let announcedQuery = supabase
+          .from("analytics_announced_sales")
+          .select("id,status,announced_at,sale_units,city,zone")
+          .gte("announced_at", `${range.start}T00:00:00`)
+          .lt("announced_at", `${range.end}T00:00:00`)
+          .limit(30_000);
 
-    const [salesResult, announcedResult] = await Promise.all([
-      salesQuery,
-      announcedQuery,
-    ]);
+        if (filters.region !== "Todas las zonas") {
+          salesQuery = salesQuery.eq("zone", filters.region);
+          announcedQuery = announcedQuery.eq("zone", filters.region);
+        }
+        if (filters.city !== "Todas las ciudades") {
+          salesQuery = salesQuery.eq("city", filters.city);
+          announcedQuery = announcedQuery.eq("city", filters.city);
+        }
+        if (filters.channel !== "Todos los canales") {
+          salesQuery = salesQuery.eq("medium", filters.channel);
+        }
 
-    const firstError = salesResult.error || announcedResult.error;
-    if (firstError) {
-      setError(firstError.message);
-    } else {
-      setSales((salesResult.data || []) as SaleRow[]);
-      setAnnounced((announcedResult.data || []) as AnnouncedRow[]);
-      setUpdatedAt(new Date());
-    }
-    setLoading(false);
-  }, [filters]);
+        return Promise.all([salesQuery, announcedQuery]);
+      };
+
+      try {
+        let [salesResult, announcedResult] = await runQueries();
+        let firstError = salesResult.error || announcedResult.error;
+
+        if (firstError?.message.toLowerCase().includes("failed to fetch")) {
+          await wait(700);
+          [salesResult, announcedResult] = await runQueries();
+          firstError = salesResult.error || announcedResult.error;
+        }
+
+        if (requestId !== requestSequence.current) return;
+
+        if (firstError) {
+          setError(
+            "La conexión con Supabase se interrumpió. Se conservan los últimos datos y el sistema reintentará automáticamente.",
+          );
+          return;
+        }
+
+        setSales((salesResult.data || []) as SaleRow[]);
+        setAnnounced((announcedResult.data || []) as AnnouncedRow[]);
+        setUpdatedAt(new Date());
+        setError("");
+      } catch {
+        if (requestId === requestSequence.current) {
+          setError(
+            "La conexión con Supabase se interrumpió. Se conservan los últimos datos y el sistema reintentará automáticamente.",
+          );
+        }
+      } finally {
+        if (requestId === requestSequence.current) setLoading(false);
+      }
+    },
+    [filters.channel, filters.city, filters.month, filters.region],
+  );
 
   useEffect(() => {
-    setLoading(true);
-    void load();
-  }, [load]);
+    void load(true);
 
-  useEffect(() => {
     const channel = supabase
       .channel(`live-area-${profile.id}`)
       .on(
@@ -283,7 +336,7 @@ export function LiveSalesAreaDashboard({ profile }: { profile: Profile }) {
       )
       .subscribe();
 
-    const timer = window.setInterval(() => void load(), 15000);
+    const timer = window.setInterval(() => void load(), 45_000);
     return () => {
       window.clearInterval(timer);
       void supabase.removeChannel(channel);
@@ -392,7 +445,7 @@ export function LiveSalesAreaDashboard({ profile }: { profile: Profile }) {
           </p>
         </div>
         <button
-          onClick={() => void load()}
+          onClick={() => void load(true)}
           disabled={loading}
           className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[.08] bg-white/[.03] px-4 py-2.5 text-xs font-bold text-zinc-300 disabled:opacity-50"
         >
@@ -406,8 +459,8 @@ export function LiveSalesAreaDashboard({ profile }: { profile: Profile }) {
       </div>
 
       {error && (
-        <p className="rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-3 text-xs text-rose-300">
-          No se pudieron cargar los indicadores: {error}
+        <p className="rounded-xl border border-amber-500/20 bg-amber-500/[.06] p-3 text-xs text-amber-200">
+          {error}
         </p>
       )}
 
