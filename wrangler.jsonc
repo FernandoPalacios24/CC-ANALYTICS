@@ -3,7 +3,10 @@
   "name": "cc-analytics",
   "main": "./dist/server/index.js",
   "compatibility_date": "2026-08-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env"
+  ],
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS"
