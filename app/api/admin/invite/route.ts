@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 
+const SUPABASE_URL = "https://xymexyhgydwkwflihqkc.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY =
+  "sb_publishable_KnO0nilQ2_D42LxuFrxJfg_2SRYJMox";
+
 const allowedRoles = new Set([
   "Administrador",
   "Líder de departamento",
@@ -91,20 +95,14 @@ async function writeAudit(
 }
 
 export async function POST(request: Request) {
-  const supabaseUrl = runtimeString("NEXT_PUBLIC_SUPABASE_URL");
+  const supabaseUrl = runtimeString("NEXT_PUBLIC_SUPABASE_URL") || SUPABASE_URL;
   const publishableKey =
     runtimeString("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") ||
-    runtimeString("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+    runtimeString("NEXT_PUBLIC_SUPABASE_ANON_KEY") ||
+    SUPABASE_PUBLISHABLE_KEY;
   const serviceRoleKey =
     runtimeString("SUPABASE_SECRET_KEY") ||
     runtimeString("SUPABASE_SERVICE_ROLE_KEY");
-
-  if (!supabaseUrl || !publishableKey) {
-    return jsonError(
-      "La conexión independiente de CC Analytics está incompleta.",
-      503,
-    );
-  }
 
   if (!serviceRoleKey) {
     return jsonError(
