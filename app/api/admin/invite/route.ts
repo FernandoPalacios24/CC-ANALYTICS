@@ -93,7 +93,9 @@ export async function POST(request: Request) {
   const publishableKey =
     runtimeString("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") ||
     runtimeString("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  const serviceRoleKey = runtimeString("SUPABASE_SERVICE_ROLE_KEY");
+  const serviceRoleKey =
+    runtimeString("SUPABASE_SECRET_KEY") ||
+    runtimeString("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !publishableKey) {
     return jsonError("La conexión independiente de CC Analytics está incompleta.", 503);
@@ -101,7 +103,7 @@ export async function POST(request: Request) {
 
   if (!serviceRoleKey) {
     return jsonError(
-      "Cloudflare no entregó el binding SUPABASE_SERVICE_ROLE_KEY al Worker cc-analytics.",
+      "Cloudflare no entregó SUPABASE_SECRET_KEY ni SUPABASE_SERVICE_ROLE_KEY al Worker cc-analytics.",
       503,
     );
   }
