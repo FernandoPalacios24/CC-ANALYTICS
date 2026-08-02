@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   FileSpreadsheet,
@@ -20,6 +20,28 @@ import {
 } from "@/lib/analytics-profile";
 import { supabase, supabaseConfigured } from "@/lib/supabase-client";
 
+function currentMonthLabel() {
+  return new Intl.DateTimeFormat("es-HN", {
+    month: "long",
+    year: "numeric",
+  })
+    .format(new Date())
+    .replace(/^./, (value) => value.toUpperCase());
+}
+
+function recentMonthLabels(total = 24) {
+  const now = new Date();
+  return Array.from({ length: total }, (_, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - index, 1);
+    return new Intl.DateTimeFormat("es-HN", {
+      month: "long",
+      year: "numeric",
+    })
+      .format(date)
+      .replace(/^./, (value) => value.toUpperCase());
+  });
+}
+
 export function AnalyticsRoot() {
   const [presentationAuthorized, setPresentationAuthorized] = useState(false);
   const [salesAuthorized, setSalesAuthorized] = useState(false);
@@ -31,6 +53,7 @@ export function AnalyticsRoot() {
   const [currentHeading, setCurrentHeading] = useState("");
   const [liveDashboardHost, setLiveDashboardHost] =
     useState<HTMLElement | null>(null);
+  const initializedMonthForUser = useRef<string | null>(null);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -44,6 +67,7 @@ export function AnalyticsRoot() {
         setProfile(null);
         setProfiles([]);
         setSalesOpen(false);
+        initializedMonthForUser.current = null;
         return;
       }
 
@@ -124,6 +148,71 @@ export function AnalyticsRoot() {
     });
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!profile || currentHeading !== "Dashboard de mi área") return;
+
+    let optionObserver: MutationObserver | null = null;
+
+    const prepareMonthSelector = () => {
+      const select = document.querySelector<HTMLSelectElement>(
+        "main > div.mb-5 select",
+      );
+      if (!select) return false;
+
+      const months = recentMonthLabels();
+      const existing = new Set(
+        Array.from(select.options).map((option) => option.value),
+      );
+
+      months.forEach((month, index) => {
+        if (existing.has(month)) return;
+        const option = new Option(month, month);
+        if (index === 0 && select.options.length > 1) {
+          select.insertBefore(option, select.options[1]);
+        } else {
+          select.add(option);
+        }
+        existing.add(month);
+      });
+
+      if (initializedMonthForUser.current !== profile.id) {
+        const currentMonth = currentMonthLabel();
+        select.value = currentMonth;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        initializedMonthForUser.current = profile.id;
+      }
+
+      if (!optionObserver) {
+        optionObserver = new MutationObserver(() => {
+          const currentMonth = currentMonthLabel();
+          if (
+            !Array.from(select.options).some(
+              (option) => option.value === currentMonth,
+            )
+          ) {
+            select.insertBefore(
+              new Option(currentMonth, currentMonth),
+              select.options[1] || null,
+            );
+          }
+        });
+        optionObserver.observe(select, { childList: true });
+      }
+
+      return true;
+    };
+
+    prepareMonthSelector();
+    const firstRetry = window.setTimeout(prepareMonthSelector, 150);
+    const secondRetry = window.setTimeout(prepareMonthSelector, 500);
+
+    return () => {
+      window.clearTimeout(firstRetry);
+      window.clearTimeout(secondRetry);
+      optionObserver?.disconnect();
+    };
+  }, [currentHeading, profile]);
 
   useEffect(() => {
     const existingHost = document.getElementById("cc-live-sales-host");
