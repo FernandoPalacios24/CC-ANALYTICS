@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
-import { env as workerEnv } from "cloudflare:workers";
 
 const allowedRoles = new Set([
   "Administrador",
@@ -35,10 +34,8 @@ type InviteInput = {
 };
 
 function runtimeString(name: string) {
-  const binding = workerEnv[name];
-  if (typeof binding === "string" && binding.trim()) return binding.trim();
-  const fallback = process.env[name];
-  return typeof fallback === "string" && fallback.trim() ? fallback.trim() : "";
+  const value = process.env[name];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function normalize(value: unknown) {
@@ -61,12 +58,17 @@ function roleCode(role: string) {
   return "analyst";
 }
 
-async function findAuthUserByEmail(admin: SupabaseClient, email: string): Promise<User | null> {
+async function findAuthUserByEmail(
+  admin: SupabaseClient,
+  email: string,
+): Promise<User | null> {
   const perPage = 200;
   for (let page = 1; page <= 50; page += 1) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
     if (error) throw error;
-    const found = data.users.find((user) => normalize(user.email) === normalize(email));
+    const found = data.users.find(
+      (user) => normalize(user.email) === normalize(email),
+    );
     if (found) return found;
     if (data.users.length < perPage) return null;
   }
@@ -98,7 +100,10 @@ export async function POST(request: Request) {
     runtimeString("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !publishableKey) {
-    return jsonError("La conexión independiente de CC Analytics está incompleta.", 503);
+    return jsonError(
+      "La conexión independiente de CC Analytics está incompleta.",
+      503,
+    );
   }
 
   if (!serviceRoleKey) {
@@ -158,8 +163,10 @@ export async function POST(request: Request) {
   const role = String(input.role ?? "").trim();
   const managerId = input.managerId || null;
 
-  if (!name || name.length > 120) return jsonError("Ingresa un nombre completo válido.", 400);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonError("Ingresa un correo válido.", 400);
+  if (!name || name.length > 120)
+    return jsonError("Ingresa un nombre completo válido.", 400);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return jsonError("Ingresa un correo válido.", 400);
   if (
     password.length < 10 ||
     !/[A-Z]/.test(password) ||
@@ -171,9 +178,12 @@ export async function POST(request: Request) {
       400,
     );
   }
-  if (!allowedRoles.has(role)) return jsonError("El rol solicitado no es válido.", 400);
-  if (!allowedDepartments.has(department)) return jsonError("El departamento solicitado no es válido.", 400);
-  if (!zone || !jobProfile) return jsonError("Zona y cargo son obligatorios.", 400);
+  if (!allowedRoles.has(role))
+    return jsonError("El rol solicitado no es válido.", 400);
+  if (!allowedDepartments.has(department))
+    return jsonError("El departamento solicitado no es válido.", 400);
+  if (!zone || !jobProfile)
+    return jsonError("Zona y cargo son obligatorios.", 400);
   if (/vendedor|ejecutivo de ventas/i.test(jobProfile)) {
     return jsonError("Los vendedores no reciben usuario de acceso.", 400);
   }
@@ -183,7 +193,10 @@ export async function POST(request: Request) {
     department = "Administración";
     zone = "Nacional";
   } else if (department === "Administración") {
-    return jsonError("Solo el administrador puede pertenecer a Administración.", 400);
+    return jsonError(
+      "Solo el administrador puede pertenecer a Administración.",
+      400,
+    );
   }
 
   if (!["admin", "leader"].includes(targetRole) && !managerId) {
@@ -208,7 +221,10 @@ export async function POST(request: Request) {
       !(manager.zone === zone || manager.zone === "Nacional") ||
       !validLevel
     ) {
-      return jsonError("El superior seleccionado no corresponde al alcance requerido.", 400);
+      return jsonError(
+        "El superior seleccionado no corresponde al alcance requerido.",
+        400,
+      );
     }
   }
 
@@ -233,16 +249,21 @@ export async function POST(request: Request) {
         email_confirm: true,
         user_metadata: userMetadata,
       });
-      if (error || !data.user) throw error || new Error("Supabase no devolvió el usuario.");
+      if (error || !data.user)
+        throw error || new Error("Supabase no devolvió el usuario.");
       targetUser = data.user;
       identityCreated = true;
     } else {
-      const { data, error } = await admin.auth.admin.updateUserById(targetUser.id, {
-        password,
-        email_confirm: true,
-        user_metadata: userMetadata,
-      });
-      if (error || !data.user) throw error || new Error("No se pudo actualizar la cuenta.");
+      const { data, error } = await admin.auth.admin.updateUserById(
+        targetUser.id,
+        {
+          password,
+          email_confirm: true,
+          user_metadata: userMetadata,
+        },
+      );
+      if (error || !data.user)
+        throw error || new Error("No se pudo actualizar la cuenta.");
       targetUser = data.user;
     }
   } catch (error) {
@@ -252,26 +273,36 @@ export async function POST(request: Request) {
       entity_type: "analytics_profile",
       department,
       zone,
-      metadata: { email, reason: error instanceof Error ? error.message : "Error desconocido" },
+      metadata: {
+        email,
+        reason: error instanceof Error ? error.message : "Error desconocido",
+      },
     });
-    return jsonError(error instanceof Error ? error.message : "No se pudo crear el usuario.", 502);
+    return jsonError(
+      error instanceof Error ? error.message : "No se pudo crear el usuario.",
+      502,
+    );
   }
 
-  const { error: profileError } = await admin.from("analytics_profiles").upsert(
-    {
-      id: targetUser.id,
-      full_name: name,
-      email,
-      department,
-      job_title: jobProfile,
-      zone,
-      reports_to: ["admin", "leader"].includes(targetRole) ? null : managerId,
-      role: targetRole,
-      status: "activo",
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "id" },
-  );
+  const { error: profileError } = await admin
+    .from("analytics_profiles")
+    .upsert(
+      {
+        id: targetUser.id,
+        full_name: name,
+        email,
+        department,
+        job_title: jobProfile,
+        zone,
+        reports_to: ["admin", "leader"].includes(targetRole)
+          ? null
+          : managerId,
+        role: targetRole,
+        status: "activo",
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
 
   if (profileError) {
     if (identityCreated) await admin.auth.admin.deleteUser(targetUser.id);
@@ -305,7 +336,9 @@ export async function POST(request: Request) {
       jobProfile,
       zone,
       role,
-      managerId: ["admin", "leader"].includes(targetRole) ? null : managerId,
+      managerId: ["admin", "leader"].includes(targetRole)
+        ? null
+        : managerId,
       initials: name
         .split(/\s+/)
         .map((part) => part[0])
