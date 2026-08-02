@@ -5,12 +5,14 @@ import { createPortal } from "react-dom";
 import {
   FileSpreadsheet,
   MonitorUp,
+  PencilLine,
   Presentation,
   Radio,
   X,
 } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { LiveSalesAreaDashboard } from "@/components/live-sales-area-dashboard";
+import { SalesCorrectionCenter } from "@/components/sales-correction-center";
 import { SalesDataHubV2 } from "@/components/sales-data-hub-v2";
 import type { Profile } from "@/components/analytics-app-v2";
 import {
@@ -45,10 +47,12 @@ function recentMonthLabels(total = 24) {
 export function AnalyticsRoot() {
   const [presentationAuthorized, setPresentationAuthorized] = useState(false);
   const [salesAuthorized, setSalesAuthorized] = useState(false);
+  const [correctionAuthorized, setCorrectionAuthorized] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [insideReports, setInsideReports] = useState(false);
   const [salesOpen, setSalesOpen] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [navHost, setNavHost] = useState<HTMLElement | null>(null);
   const [currentHeading, setCurrentHeading] = useState("");
   const [liveDashboardHost, setLiveDashboardHost] =
@@ -64,9 +68,11 @@ export function AnalyticsRoot() {
       if (!active || !data.session) {
         setPresentationAuthorized(false);
         setSalesAuthorized(false);
+        setCorrectionAuthorized(false);
         setProfile(null);
         setProfiles([]);
         setSalesOpen(false);
+        setCorrectionOpen(false);
         initializedMonthForUser.current = null;
         return;
       }
@@ -118,6 +124,12 @@ export function AnalyticsRoot() {
             "Supervisor",
             "Operador",
           ].includes(mapped.role),
+      );
+      setCorrectionAuthorized(
+        mapped.active &&
+          ["Administrador", "Líder de departamento", "Supervisor"].includes(
+            mapped.role,
+          ),
       );
     }
 
@@ -262,7 +274,7 @@ export function AnalyticsRoot() {
     <>
       <AuthShell />
 
-      {profile && liveDashboardHost && !salesOpen &&
+      {profile && liveDashboardHost && !salesOpen && !correctionOpen &&
         createPortal(
           <LiveSalesAreaDashboard profile={profile} />,
           liveDashboardHost,
@@ -270,23 +282,51 @@ export function AnalyticsRoot() {
 
       {salesAuthorized && navHost &&
         createPortal(
-          <button
-            title="Ingreso de ventas"
-            onClick={() => setSalesOpen(true)}
-            className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
-              salesOpen
-                ? "bg-gradient-to-r from-emerald-600/20 to-cyan-500/[.04] text-emerald-200 shadow-[inset_2px_0_0_#34d399]"
-                : "text-zinc-500 hover:bg-white/[.035] hover:text-zinc-300"
-            }`}
-          >
-            <FileSpreadsheet size={17} />
-            <span className="truncate text-[11px] font-semibold">
-              Ingreso de ventas
-            </span>
-            {salesOpen && (
-              <span className="ml-auto h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          <>
+            <button
+              title="Ingreso de ventas"
+              onClick={() => {
+                setCorrectionOpen(false);
+                setSalesOpen(true);
+              }}
+              className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                salesOpen
+                  ? "bg-gradient-to-r from-emerald-600/20 to-cyan-500/[.04] text-emerald-200 shadow-[inset_2px_0_0_#34d399]"
+                  : "text-zinc-500 hover:bg-white/[.035] hover:text-zinc-300"
+              }`}
+            >
+              <FileSpreadsheet size={17} />
+              <span className="truncate text-[11px] font-semibold">
+                Ingreso de ventas
+              </span>
+              {salesOpen && (
+                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              )}
+            </button>
+
+            {correctionAuthorized && (
+              <button
+                title="Corrección de datos"
+                onClick={() => {
+                  setSalesOpen(false);
+                  setCorrectionOpen(true);
+                }}
+                className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                  correctionOpen
+                    ? "bg-gradient-to-r from-purple-600/20 to-fuchsia-500/[.04] text-purple-200 shadow-[inset_2px_0_0_#a855f7]"
+                    : "text-zinc-500 hover:bg-white/[.035] hover:text-zinc-300"
+                }`}
+              >
+                <PencilLine size={17} />
+                <span className="truncate text-[11px] font-semibold">
+                  Corrección de datos
+                </span>
+                {correctionOpen && (
+                  <span className="ml-auto h-1.5 w-1.5 rounded-full bg-purple-400" />
+                )}
+              </button>
             )}
-          </button>,
+          </>,
           navHost,
         )}
 
@@ -315,39 +355,50 @@ export function AnalyticsRoot() {
         </div>
       )}
 
-      {presentationAuthorized && insideReports && !salesOpen && (
-        <aside className="fixed bottom-6 right-6 z-[70] w-[330px] overflow-hidden rounded-2xl border border-purple-400/25 bg-[#101016]/95 shadow-[0_25px_80px_rgba(0,0,0,.55),0_0_45px_rgba(168,85,247,.14)] backdrop-blur-xl">
-          <div className="flex items-center gap-3 border-b border-white/[.07] p-4">
-            <span className="grid h-11 w-11 place-items-center rounded-xl bg-purple-500/10 text-purple-300">
-              <Presentation size={22} />
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-black text-white">
-                  Presentación en vivo
-                </h2>
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[8px] font-black text-emerald-300">
-                  <Radio size={9} /> LIVE
-                </span>
+      {correctionOpen && correctionAuthorized && profile && (
+        <SalesCorrectionCenter
+          profile={profile}
+          profiles={profiles}
+          onClose={() => setCorrectionOpen(false)}
+        />
+      )}
+
+      {presentationAuthorized &&
+        insideReports &&
+        !salesOpen &&
+        !correctionOpen && (
+          <aside className="fixed bottom-6 right-6 z-[70] w-[330px] overflow-hidden rounded-2xl border border-purple-400/25 bg-[#101016]/95 shadow-[0_25px_80px_rgba(0,0,0,.55),0_0_45px_rgba(168,85,247,.14)] backdrop-blur-xl">
+            <div className="flex items-center gap-3 border-b border-white/[.07] p-4">
+              <span className="grid h-11 w-11 place-items-center rounded-xl bg-purple-500/10 text-purple-300">
+                <Presentation size={22} />
+              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-black text-white">
+                    Presentación en vivo
+                  </h2>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[8px] font-black text-emerald-300">
+                    <Radio size={9} /> LIVE
+                  </span>
+                </div>
+                <p className="mt-1 text-[10px] leading-4 text-zinc-500">
+                  Podio, ranking y ventas actualizadas para el TV del departamento.
+                </p>
               </div>
-              <p className="mt-1 text-[10px] leading-4 text-zinc-500">
-                Podio, ranking y ventas actualizadas para el TV del departamento.
+            </div>
+            <div className="p-4">
+              <button
+                onClick={openPresentation}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-4 py-3 text-xs font-black text-white shadow-[0_0_28px_rgba(168,85,247,.22)]"
+              >
+                <MonitorUp size={17} /> Abrir en segunda pantalla
+              </button>
+              <p className="mt-2 text-center text-[9px] text-zinc-600">
+                Mueve la ventana al TV y activa pantalla completa.
               </p>
             </div>
-          </div>
-          <div className="p-4">
-            <button
-              onClick={openPresentation}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-4 py-3 text-xs font-black text-white shadow-[0_0_28px_rgba(168,85,247,.22)]"
-            >
-              <MonitorUp size={17} /> Abrir en segunda pantalla
-            </button>
-            <p className="mt-2 text-center text-[9px] text-zinc-600">
-              Mueve la ventana al TV y activa pantalla completa.
-            </p>
-          </div>
-        </aside>
-      )}
+          </aside>
+        )}
     </>
   );
 }
