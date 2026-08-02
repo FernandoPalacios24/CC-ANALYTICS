@@ -19,6 +19,9 @@
       }
     ],
     "paths": {
+      "@/lib/sales-import-detection": [
+        "./lib/sales-import-detection-safe.ts"
+      ],
       "@/*": ["./*"]
     }
   },
