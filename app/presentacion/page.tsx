@@ -1,5 +1,5 @@
-import { LiveSalesPresentationV2 } from "@/components/live-sales-presentation-v2";
+import { LiveSalesPresentationV3 } from "@/components/live-sales-presentation-v3";
 
 export default function PresentationPage() {
-  return <LiveSalesPresentationV2 />;
+  return <LiveSalesPresentationV3 />;
 }
