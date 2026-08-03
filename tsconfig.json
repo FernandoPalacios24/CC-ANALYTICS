@@ -19,6 +19,9 @@
       }
     ],
     "paths": {
+      "@/components/sales-correction-center": [
+        "./components/sales-correction-center-lifecycle.tsx"
+      ],
       "@/components/sales-data-hub-v2": [
         "./components/sales-data-hub-integrity.tsx"
       ],
