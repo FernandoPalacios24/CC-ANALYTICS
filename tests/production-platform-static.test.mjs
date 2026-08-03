@@ -41,8 +41,12 @@ const metricsMigration = await readFile(
   "supabase/department-metrics-production.sql",
   "utf8",
 );
-const importMigration = await readFile(
-  "supabase/department-import-metric-replacement.sql",
+const atomicImport = await readFile(
+  "supabase/atomic-department-import-commit.sql",
+  "utf8",
+);
+const abortImport = await readFile(
+  "supabase/abort-staged-department-import.sql",
   "utf8",
 );
 const copilot = await readFile("app/api/report-copilot/route.ts", "utf8");
@@ -73,18 +77,24 @@ test("visible production modules read Supabase instead of demo fixtures", () => 
   assert.match(application, /SalesGoalsCenter/);
 });
 
-test("department imports persist rows, replace previous cuts and feed metrics", () => {
+test("department imports stage rows before atomically replacing the previous cut", () => {
   for (const marker of [
     'from("analytics_imports")',
     'from("analytics_records")',
-    "analytics_finalize_department_import",
-    "analytics_upsert_department_metric",
-    "protectedKeys",
+    "analytics_commit_department_import",
+    "analytics_abort_department_import",
+    "target_metrics",
   ]) {
-    assert.match(importCenter, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(
+      importCenter,
+      new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
   }
-  assert.match(importMigration, /source_type = 'import'/);
-  assert.match(importMigration, /removed_imported_metrics/);
+  assert.match(atomicImport, /loaded_records < current_row\.row_count/);
+  assert.match(atomicImport, /removed_imported_metrics/);
+  assert.match(atomicImport, /protected_manual_metrics/);
+  assert.match(atomicImport, /department_import_committed/);
+  assert.match(abortImport, /department_import_aborted/);
 });
 
 test("metrics core includes RLS, audit, targets and profile completeness", () => {
