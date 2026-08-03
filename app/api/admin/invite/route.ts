@@ -235,6 +235,20 @@ export async function POST(request: Request) {
     role: targetRole,
   };
 
+  await writeAudit(admin, {
+    actor_id: actor.id,
+    action: "user_create_requested",
+    entity_type: "analytics_profile",
+    department,
+    zone,
+    metadata: {
+      email,
+      role,
+      job_profile: jobProfile,
+      manager_id: managerId,
+    },
+  });
+
   let targetUser: User | null = null;
   let identityCreated = false;
 
@@ -303,6 +317,19 @@ export async function POST(request: Request) {
     );
 
   if (profileError) {
+    await writeAudit(admin, {
+      actor_id: actor.id,
+      action: "user_profile_failed",
+      entity_type: "analytics_profile",
+      entity_id: targetUser.id,
+      department,
+      zone,
+      metadata: {
+        email,
+        identity_created: identityCreated,
+        reason: profileError.message,
+      },
+    });
     if (identityCreated) await admin.auth.admin.deleteUser(targetUser.id);
     return jsonError(
       identityCreated
