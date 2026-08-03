@@ -26,10 +26,6 @@ import {
 import { supabase, supabaseConfigured } from "@/lib/supabase-client";
 
 const nativeHeadings = new Set([
-  "Ventas digitales",
-  "Ventas residenciales",
-  "Ventas residenciales rurales",
-  "Ventas corporativas",
   "Reportes",
   "Usuarios y permisos",
   "Auditoría y seguridad",
@@ -57,20 +53,18 @@ function recentMonthLabels(total = 36) {
   });
 }
 
+function applicationMain() {
+  return document.querySelector<HTMLElement>("div.min-h-screen main");
+}
+
 function applicationHeading() {
-  const headers = Array.from(document.querySelectorAll<HTMLElement>("header"));
-  const applicationHeader = headers.find((header) =>
-    header.parentElement?.querySelector(":scope > main"),
-  );
-  return (
-    applicationHeader?.querySelector("h1")?.textContent?.trim() ||
-    document.querySelector("header h1")?.textContent?.trim() ||
-    ""
-  );
+  const main = applicationMain();
+  const shell = main?.parentElement;
+  return shell?.querySelector(":scope > header h1")?.textContent?.trim() || "";
 }
 
 function filterSelects() {
-  const main = document.querySelector<HTMLElement>("body > div main, main");
+  const main = applicationMain();
   if (!main) return [];
   const bar = Array.from(main.children).find(
     (child) => child instanceof HTMLElement && child.classList.contains("mb-5"),
@@ -194,8 +188,7 @@ export function ProductionModuleController() {
       );
       buttons.forEach((button) => {
         const title = button.title;
-        const known = Boolean(moduleForHeading(title));
-        if (!known) return;
+        if (!moduleForHeading(title)) return;
         button.style.display = canSeeNav(profile, title) ? "" : "none";
       });
 
@@ -211,8 +204,7 @@ export function ProductionModuleController() {
         }
       }
 
-      const selects = filterSelects();
-      const monthSelect = selects[0];
+      const monthSelect = filterSelects()[0];
       if (monthSelect) {
         const existing = new Set(
           Array.from(monthSelect.options).map((option) => option.value),
@@ -223,8 +215,8 @@ export function ProductionModuleController() {
             existing.add(month);
           }
         });
-        if (initializedProfile.current === profile.id && !monthSelect.dataset.ccMonthReady) {
-          monthSelect.dataset.ccMonthReady = "true";
+        if (monthSelect.dataset.ccMonthProfile !== profile.id) {
+          monthSelect.dataset.ccMonthProfile = profile.id;
           const currentMonth = currentMonthLabel();
           monthSelect.value = currentMonth;
           monthSelect.dispatchEvent(new Event("change", { bubbles: true }));
@@ -267,7 +259,7 @@ export function ProductionModuleController() {
       return;
     }
 
-    const main = document.querySelector<HTMLElement>("body > div main, main");
+    const main = applicationMain();
     if (!main) return;
     const legacy = Array.from(main.children).find(
       (child) =>
@@ -377,8 +369,21 @@ export function ProductionModuleController() {
     }
 
     const module = moduleForHeading(heading);
-    if (!module || module.kind !== "metrics") return null;
+    if (!module) return null;
     const department = moduleOwner(module, profile);
+
+    if (module.moduleKey === "sales" && module.ownerDepartment) {
+      return (
+        <RealSalesDashboard
+          profile={profile}
+          department={department}
+          title={module.title}
+          filters={filters}
+        />
+      );
+    }
+
+    if (module.kind !== "metrics") return null;
     return (
       <RealDepartmentDashboard
         profile={profile}
