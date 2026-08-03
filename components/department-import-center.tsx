@@ -14,7 +14,10 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import type { Department, Profile } from "@/components/analytics-app-v2";
 import type { ProductionFilters } from "@/components/real-department-dashboard";
-import { moduleOptionsForDepartment, salesDepartments } from "@/lib/production-platform";
+import {
+  moduleOptionsForDepartment,
+  salesDepartments,
+} from "@/lib/production-platform";
 import { supabase } from "@/lib/supabase-client";
 
 type RawRow = Record<string, unknown>;
@@ -22,10 +25,27 @@ type RawRow = Record<string, unknown>;
 type DetectedMetric = {
   key: string;
   label: string;
-  unit: "number" | "count" | "currency" | "percent" | "minutes" | "hours" | "days" | "ratio";
+  unit:
+    | "number"
+    | "count"
+    | "currency"
+    | "percent"
+    | "minutes"
+    | "hours"
+    | "days"
+    | "ratio";
   value: number;
   numericRows: number;
   totalRows: number;
+};
+
+type CommitResult = {
+  loaded_records?: number;
+  removed_records?: number;
+  removed_imported_metrics?: number;
+  imported_metrics?: number;
+  protected_manual_metrics?: number;
+  superseded_imports?: number;
 };
 
 const departments: Department[] = [
@@ -55,7 +75,10 @@ function monthIso(label: string) {
     noviembre: 11,
     diciembre: 12,
   };
-  const normalized = label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const normalized = label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
   const match = normalized.match(/^([a-z]+)\s+(\d{4})$/);
   if (!match || !months[match[1]]) {
     const now = new Date();
@@ -91,13 +114,31 @@ function parseNumber(value: unknown) {
 
 function detectUnit(label: string): DetectedMetric["unit"] {
   const key = normalizeKey(label);
-  if (/(monto|ingreso|costo|valor|inversion|cartera|factura|revenue|spend)/.test(key)) return "currency";
-  if (/(porcentaje|percent|tasa|rate|cumplimiento|sla|csat|cobertura|disponibilidad|margen)/.test(key)) return "percent";
+  if (
+    /(monto|ingreso|costo|valor|inversion|cartera|factura|revenue|spend)/.test(
+      key,
+    )
+  ) {
+    return "currency";
+  }
+  if (
+    /(porcentaje|percent|tasa|rate|cumplimiento|sla|csat|cobertura|disponibilidad|margen)/.test(
+      key,
+    )
+  ) {
+    return "percent";
+  }
   if (/(minuto|minutes|tiempo_respuesta)/.test(key)) return "minutes";
   if (/(hora|hours)/.test(key)) return "hours";
   if (/(dias|days)/.test(key)) return "days";
   if (/(ratio|roas|roa|rotacion)/.test(key)) return "ratio";
-  if (/(cantidad|total|numero|count|ventas|clientes|llamadas|tickets|ordenes|empleados|vacantes)/.test(key)) return "count";
+  if (
+    /(cantidad|total|numero|count|ventas|clientes|llamadas|tickets|ordenes|empleados|vacantes)/.test(
+      key,
+    )
+  ) {
+    return "count";
+  }
   return "number";
 }
 
@@ -108,31 +149,49 @@ function detectMetrics(rows: RawRow[]) {
     const numbers = rows
       .map((row) => parseNumber(row[header]))
       .filter((value): value is number => value !== null);
-    const nonEmpty = rows.filter((row) => String(row[header] ?? "").trim()).length;
-    if (!numbers.length || !nonEmpty || numbers.length / nonEmpty < 0.6) return [];
+    const nonEmpty = rows.filter((row) =>
+      String(row[header] ?? "").trim(),
+    ).length;
+    if (!numbers.length || !nonEmpty || numbers.length / nonEmpty < 0.6) {
+      return [];
+    }
     const unit = detectUnit(header);
-    const averageUnits: DetectedMetric["unit"][] = ["percent", "minutes", "hours", "days", "ratio"];
+    const averageUnits: DetectedMetric["unit"][] = [
+      "percent",
+      "minutes",
+      "hours",
+      "days",
+      "ratio",
+    ];
     const value = averageUnits.includes(unit)
       ? numbers.reduce((sum, current) => sum + current, 0) / numbers.length
       : numbers.reduce((sum, current) => sum + current, 0);
-    return [{
-      key: normalizeKey(header),
-      label: header,
-      unit,
-      value,
-      numericRows: numbers.length,
-      totalRows: rows.length,
-    }];
+    return [
+      {
+        key: normalizeKey(header),
+        label: header,
+        unit,
+        value,
+        numericRows: numbers.length,
+        totalRows: rows.length,
+      },
+    ];
   });
 }
 
 function formatValue(metric: DetectedMetric) {
   if (metric.unit === "currency") {
-    return new Intl.NumberFormat("es-HN", { style: "currency", currency: "HNL", maximumFractionDigits: 0 }).format(metric.value);
+    return new Intl.NumberFormat("es-HN", {
+      style: "currency",
+      currency: "HNL",
+      maximumFractionDigits: 0,
+    }).format(metric.value);
   }
   if (metric.unit === "percent") return `${metric.value.toFixed(1)}%`;
   if (metric.unit === "ratio") return `${metric.value.toFixed(2)}x`;
-  return new Intl.NumberFormat("es-HN", { maximumFractionDigits: 2 }).format(metric.value);
+  return new Intl.NumberFormat("es-HN", {
+    maximumFractionDigits: 2,
+  }).format(metric.value);
 }
 
 const inputClass =
@@ -151,8 +210,13 @@ export function DepartmentImportCenter({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [department, setDepartment] = useState<Department>(initialDepartment);
-  const modules = useMemo(() => moduleOptionsForDepartment(department), [department]);
-  const [moduleKey, setModuleKey] = useState(modules[0]?.moduleKey || "general");
+  const modules = useMemo(
+    () => moduleOptionsForDepartment(department),
+    [department],
+  );
+  const [moduleKey, setModuleKey] = useState(
+    modules[0]?.moduleKey || "general",
+  );
   const [zone, setZone] = useState(
     filters.region !== "Todas las zonas"
       ? filters.region
@@ -197,7 +261,9 @@ export function DepartmentImportCenter({
       const cleaned = parsed.filter((row) =>
         Object.values(row).some((value) => String(value ?? "").trim()),
       );
-      if (!cleaned.length) throw new Error("El archivo no contiene filas utilizables.");
+      if (!cleaned.length) {
+        throw new Error("El archivo no contiene filas utilizables.");
+      }
       setRows(cleaned);
       setFileName(file.name);
       setSheetName(sheet);
@@ -206,20 +272,34 @@ export function DepartmentImportCenter({
       setRows([]);
       setMetrics([]);
       setFileName("");
-      setError(parseError instanceof Error ? parseError.message : "No se pudo leer el archivo.");
+      setError(
+        parseError instanceof Error
+          ? parseError.message
+          : "No se pudo leer el archivo.",
+      );
     }
+  }
+
+  async function abortImport(importId: string, reason: string) {
+    await supabase.rpc("analytics_abort_department_import", {
+      target_import_id: importId,
+      target_reason: reason,
+    });
   }
 
   async function save() {
     if (!rows.length || !fileName) return;
     if (salesDepartments.includes(department)) {
-      setError("Las ventas deben cargarse desde Ingreso de ventas para conservar vendedor, corte, coincidencia y sustitución acumulada.");
+      setError(
+        "Las ventas deben cargarse desde Ingreso de ventas para conservar vendedor, corte, coincidencia y sustitución acumulada.",
+      );
       return;
     }
     if (!moduleKey) {
       setError("Selecciona el módulo que recibirá la información.");
       return;
     }
+
     setSaving(true);
     setError("");
     setNotice("");
@@ -248,21 +328,6 @@ export function DepartmentImportCenter({
     }
 
     const importId = created.id as string;
-    const { error: finalizeError } = await supabase.rpc(
-      "analytics_finalize_department_import",
-      {
-        current_import_id: importId,
-        target_department: department,
-        target_zone: zone,
-        target_module: moduleKey,
-        target_period_month: periodMonth,
-      },
-    );
-    if (finalizeError) {
-      setError(finalizeError.message);
-      setSaving(false);
-      return;
-    }
 
     for (let start = 0; start < rows.length; start += 500) {
       const batch = rows.slice(start, start + 500).map((payload) => ({
@@ -278,62 +343,47 @@ export function DepartmentImportCenter({
         .from("analytics_records")
         .insert(batch);
       if (recordError) {
-        setError(`La importación quedó incompleta: ${recordError.message}`);
+        await abortImport(importId, recordError.message);
+        setError(
+          `La carga fue cancelada sin reemplazar el período anterior: ${recordError.message}`,
+        );
         setSaving(false);
         return;
       }
     }
 
-    const { data: protectedValues } = await supabase
-      .from("analytics_metric_values")
-      .select("metric_id,source_type,analytics_metric_definitions!inner(metric_key)")
-      .eq("department", department)
-      .eq("module_key", moduleKey)
-      .eq("zone", zone)
-      .eq("period_month", periodMonth)
-      .eq("source_type", "manual");
+    const metricPayload = metrics.map((metric) => ({
+      key: metric.key,
+      label: metric.label,
+      unit: metric.unit,
+      value: metric.value,
+      notes: `${fileName} · ${sheetName} · ${metric.numericRows}/${metric.totalRows} filas numéricas`,
+    }));
 
-    const protectedKeys = new Set(
-      (protectedValues || []).flatMap((row) => {
-        const definition = row.analytics_metric_definitions as unknown as { metric_key?: string } | null;
-        return definition?.metric_key ? [definition.metric_key] : [];
-      }),
+    const { data: commitData, error: commitError } = await supabase.rpc(
+      "analytics_commit_department_import",
+      {
+        current_import_id: importId,
+        target_department: department,
+        target_zone: zone,
+        target_module: moduleKey,
+        target_period_month: periodMonth,
+        target_metrics: metricPayload,
+      },
     );
 
-    let importedMetrics = 0;
-    let protectedMetrics = 0;
-    for (const metric of metrics) {
-      if (protectedKeys.has(metric.key)) {
-        protectedMetrics += 1;
-        continue;
-      }
-      const { error: metricError } = await supabase.rpc(
-        "analytics_upsert_department_metric",
-        {
-          target_department: department,
-          target_module_key: moduleKey,
-          target_metric_key: metric.key,
-          target_label: metric.label,
-          target_unit: metric.unit,
-          target_zone: zone,
-          target_period_month: periodMonth,
-          target_value: metric.value,
-          target_target_value: null,
-          target_notes: `${fileName} · ${sheetName} · ${metric.numericRows}/${metric.totalRows} filas numéricas`,
-          target_source_type: "import",
-          target_source_import_id: importId,
-        },
+    if (commitError) {
+      await abortImport(importId, commitError.message);
+      setError(
+        `La carga fue cancelada sin reemplazar el período anterior: ${commitError.message}`,
       );
-      if (metricError) {
-        setError(`El archivo se guardó, pero falló el indicador ${metric.label}: ${metricError.message}`);
-        setSaving(false);
-        return;
-      }
-      importedMetrics += 1;
+      setSaving(false);
+      return;
     }
 
+    const result = (commitData || {}) as CommitResult;
     setNotice(
-      `${rows.length.toLocaleString("es-HN")} filas y ${importedMetrics} indicadores actualizados.${protectedMetrics ? ` ${protectedMetrics} correcciones manuales fueron protegidas.` : ""}`,
+      `${Number(result.loaded_records || rows.length).toLocaleString("es-HN")} filas y ${Number(result.imported_metrics || 0)} indicadores confirmados. ${Number(result.removed_records || 0)} filas del corte anterior fueron sustituidas.${Number(result.protected_manual_metrics || 0) ? ` ${result.protected_manual_metrics} correcciones manuales permanecieron protegidas.` : ""}`,
     );
     setSaving(false);
     window.dispatchEvent(new CustomEvent("cc-analytics-data-changed"));
@@ -343,14 +393,23 @@ export function DepartmentImportCenter({
     <div className="animate-in space-y-4 text-white">
       <section className="flex flex-col justify-between gap-4 rounded-2xl border border-white/[.07] bg-white/[.025] p-5 sm:flex-row sm:items-center">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[.2em] text-cyan-300">Carga real · Supabase</p>
-          <h2 className="mt-1 text-xl font-black">Importar datos departamentales</h2>
+          <p className="text-[10px] font-black uppercase tracking-[.2em] text-cyan-300">
+            Carga real · Supabase
+          </p>
+          <h2 className="mt-1 text-xl font-black">
+            Importar datos departamentales
+          </h2>
           <p className="mt-1 text-xs text-zinc-500">
-            Guarda filas, reemplaza el corte anterior del mismo mes y alimenta automáticamente los indicadores numéricos.
+            La sustitución solo se confirma cuando todas las filas e indicadores nuevos quedaron guardados.
           </p>
         </div>
         {onClose && (
-          <button onClick={onClose} className="rounded-xl border border-white/[.08] p-2.5 text-zinc-400"><X size={18} /></button>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/[.08] p-2.5 text-zinc-400"
+          >
+            <X size={18} />
+          </button>
         )}
       </section>
 
@@ -380,26 +439,56 @@ export function DepartmentImportCenter({
               }}
               className={`mt-2 ${inputClass} disabled:opacity-60`}
             >
-              {(profile.role === "Administrador" ? departments : [profile.department]).map((item) => <option key={item}>{item}</option>)}
+              {(profile.role === "Administrador"
+                ? departments
+                : [profile.department]
+              ).map((item) => (
+                <option key={item}>{item}</option>
+              ))}
             </select>
           </label>
+
           <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">
             Módulo destino
-            <select value={moduleKey} onChange={(event) => setModuleKey(event.target.value)} className={`mt-2 ${inputClass}`}>
-              {modules.map((module) => <option key={`${module.ownerDepartment}-${module.moduleKey}`} value={module.moduleKey}>{module.title}</option>)}
-              {!modules.length && <option value="general">Indicadores generales</option>}
+            <select
+              value={moduleKey}
+              onChange={(event) => setModuleKey(event.target.value)}
+              className={`mt-2 ${inputClass}`}
+            >
+              {modules.map((module) => (
+                <option
+                  key={`${module.ownerDepartment}-${module.moduleKey}`}
+                  value={module.moduleKey}
+                >
+                  {module.title}
+                </option>
+              ))}
+              {!modules.length && (
+                <option value="general">Indicadores generales</option>
+              )}
             </select>
           </label>
+
           <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">
             Zona
-            <select value={zone} onChange={(event) => setZone(event.target.value)} className={`mt-2 ${inputClass}`}>
+            <select
+              value={zone}
+              onChange={(event) => setZone(event.target.value)}
+              className={`mt-2 ${inputClass}`}
+            >
               {["Nacional", "Zona Norte", "Zona Centro", "Zona Sur", profile.zone]
-                .filter((value, index, all) => value && all.indexOf(value) === index)
-                .map((item) => <option key={item}>{item}</option>)}
+                .filter(
+                  (value, index, all) =>
+                    value && all.indexOf(value) === index,
+                )
+                .map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
             </select>
           </label>
+
           <div className="rounded-xl border border-purple-400/15 bg-purple-500/[.05] p-4 text-[10px] leading-5 text-zinc-400">
-            <b className="text-purple-300">Período:</b> {filters.month}. Una nueva carga sustituye únicamente los registros importados del mismo módulo, zona y mes.
+            <b className="text-purple-300">Período:</b> {filters.month}. Una carga fallida no toca el corte vigente.
           </div>
         </div>
 
@@ -414,10 +503,19 @@ export function DepartmentImportCenter({
           className="mt-5 grid min-h-56 cursor-pointer place-items-center rounded-2xl border border-dashed border-cyan-400/25 bg-cyan-500/[.025] p-8 text-center"
         >
           <div>
-            <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-cyan-500/10 text-cyan-300"><CloudUpload size={24} /></span>
+            <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-cyan-500/10 text-cyan-300">
+              <CloudUpload size={24} />
+            </span>
             <h3 className="mt-4 font-black">Arrastra Excel o CSV</h3>
-            <p className="mt-2 text-xs text-zinc-500">Detecta automáticamente columnas numéricas y conserva todas las filas para reportes.</p>
-            <button type="button" className="mt-5 rounded-xl bg-cyan-600 px-5 py-2.5 text-xs font-black">Seleccionar archivo</button>
+            <p className="mt-2 text-xs text-zinc-500">
+              Detecta columnas numéricas y conserva todas las filas para reportes.
+            </p>
+            <button
+              type="button"
+              className="mt-5 rounded-xl bg-cyan-600 px-5 py-2.5 text-xs font-black"
+            >
+              Seleccionar archivo
+            </button>
             <input
               ref={inputRef}
               type="file"
@@ -437,29 +535,44 @@ export function DepartmentImportCenter({
           <div className="flex flex-col justify-between gap-4 border-b border-white/[.06] p-5 sm:flex-row sm:items-center">
             <div>
               <h3 className="font-black">Vista previa y métricas detectadas</h3>
-              <p className="mt-1 text-[10px] text-zinc-600">{fileName} · {sheetName} · {rows.length.toLocaleString("es-HN")} filas</p>
+              <p className="mt-1 text-[10px] text-zinc-600">
+                {fileName} · {sheetName} · {rows.length.toLocaleString("es-HN")} filas
+              </p>
             </div>
             <button
               onClick={() => void save()}
               disabled={saving}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-xs font-black disabled:opacity-50"
             >
-              {saving ? <Loader2 className="animate-spin" size={16} /> : <Database size={16} />}
-              Guardar y actualizar indicadores
+              {saving ? (
+                <Loader2 className="animate-spin" size={16} />
+              ) : (
+                <Database size={16} />
+              )}
+              Confirmar carga completa
             </button>
           </div>
 
           <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
             {metrics.map((metric) => (
-              <div key={metric.key} className="rounded-xl border border-white/[.06] bg-white/[.02] p-4">
-                <p className="truncate text-xs font-bold text-zinc-200">{metric.label}</p>
-                <p className="mt-2 text-lg font-black text-cyan-300">{formatValue(metric)}</p>
-                <p className="mt-1 text-[9px] text-zinc-600">{metric.numericRows}/{metric.totalRows} filas numéricas · {metric.unit}</p>
+              <div
+                key={metric.key}
+                className="rounded-xl border border-white/[.06] bg-white/[.02] p-4"
+              >
+                <p className="truncate text-xs font-bold text-zinc-200">
+                  {metric.label}
+                </p>
+                <p className="mt-2 text-lg font-black text-cyan-300">
+                  {formatValue(metric)}
+                </p>
+                <p className="mt-1 text-[9px] text-zinc-600">
+                  {metric.numericRows}/{metric.totalRows} filas numéricas · {metric.unit}
+                </p>
               </div>
             ))}
             {!metrics.length && (
               <div className="col-span-full rounded-xl border border-amber-500/15 bg-amber-500/[.05] p-4 text-xs text-amber-200">
-                No se detectaron columnas suficientemente numéricas. Las filas todavía pueden guardarse para usarlas en el laboratorio de reportes.
+                No se detectaron columnas numéricas. Las filas todavía pueden guardarse para el laboratorio de reportes.
               </div>
             )}
           </div>
@@ -468,13 +581,24 @@ export function DepartmentImportCenter({
             <table className="min-w-full text-left text-xs">
               <thead className="sticky top-0 bg-[#17171e] text-[10px] uppercase tracking-wider text-zinc-600">
                 <tr>
-                  {Object.keys(rows[0]).map((header) => <th key={header} className="whitespace-nowrap px-4 py-3">{header}</th>)}
+                  {Object.keys(rows[0]).map((header) => (
+                    <th key={header} className="whitespace-nowrap px-4 py-3">
+                      {header}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {rows.slice(0, 50).map((row, index) => (
                   <tr key={index} className="border-t border-white/[.05]">
-                    {Object.keys(rows[0]).map((header) => <td key={header} className="max-w-64 truncate px-4 py-3 text-zinc-400">{String(row[header] ?? "")}</td>)}
+                    {Object.keys(rows[0]).map((header) => (
+                      <td
+                        key={header}
+                        className="max-w-64 truncate px-4 py-3 text-zinc-400"
+                      >
+                        {String(row[header] ?? "")}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -485,7 +609,7 @@ export function DepartmentImportCenter({
 
       <section className="rounded-2xl border border-white/[.07] bg-white/[.025] p-4 text-[10px] leading-5 text-zinc-500">
         <FileSpreadsheet className="mr-2 inline text-cyan-300" size={14} />
-        Las ventas residenciales y digitales no pasan por este importador; usan el motor especializado de vendedores, cortes acumulados y coincidencia inteligente.
+        Las ventas residenciales y digitales usan el motor especializado de vendedores, fechas de corte y coincidencia inteligente.
       </section>
     </div>
   );
