@@ -8,12 +8,9 @@ const dashboard = await readFile(
 );
 const hub = await readFile("components/sales-data-hub-v2.tsx", "utf8");
 const matching = await readFile("lib/seller-matching.ts", "utf8");
-const root = await readFile("components/analytics-root.tsx", "utf8");
+const auth = await readFile("components/auth-shell.tsx", "utf8");
+const app = await readFile("components/production-analytics-app.tsx", "utf8");
 const page = await readFile("app/page.tsx", "utf8");
-const controller = await readFile(
-  "components/production-module-controller.tsx",
-  "utf8",
-);
 const migration = await readFile(
   "supabase/sales-snapshot-replacement-and-units.sql",
   "utf8",
@@ -62,15 +59,20 @@ test("seller matching tolerates name variants and protects ambiguity", () => {
   }
 });
 
-test("root keeps sales operations while a single production controller owns dashboards", () => {
-  assert.match(root, /SalesDataHubV2/);
-  assert.doesNotMatch(root, /LiveSalesAreaDashboard/);
-  assert.doesNotMatch(root, /cc-live-sales-host/);
-  assert.match(page, /ProductionModuleController/);
-  assert.doesNotMatch(page, /InitialDashboardController/);
-  assert.match(controller, /RealSalesDashboard/);
-  assert.match(controller, /RealExecutiveDashboard/);
-  assert.match(controller, /RealDepartmentDashboard/);
+test("authentication renders the native production app directly", () => {
+  assert.match(page, /AuthShell/);
+  assert.doesNotMatch(page, /AnalyticsRoot/);
+  assert.doesNotMatch(page, /ProductionModuleController/);
+  assert.doesNotMatch(page, /SalesDataEnhancementController/);
+  assert.match(auth, /ProductionAnalyticsApp/);
+  assert.doesNotMatch(auth, /<AnalyticsApp/);
+  assert.doesNotMatch(auth, /window\.prompt/);
+  assert.match(app, /RealSalesDashboard/);
+  assert.match(app, /RealExecutiveDashboard/);
+  assert.match(app, /RealDepartmentDashboard/);
+  assert.match(app, /ProductionUserAccess/);
+  assert.match(app, /ProductionAuditCenter/);
+  assert.match(app, /SalesGoalsCenter/);
 });
 
 test("database migration replaces imported rows but preserves manual sales", () => {
