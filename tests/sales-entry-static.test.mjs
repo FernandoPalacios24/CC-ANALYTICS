@@ -4,7 +4,11 @@ import test from "node:test";
 
 const hub = await readFile("components/sales-data-hub.tsx", "utf8");
 const detector = await readFile("lib/sales-import-detection.ts", "utf8");
-const root = await readFile("components/analytics-root.tsx", "utf8");
+const app = await readFile("components/production-analytics-app.tsx", "utf8");
+const integrity = await readFile(
+  "components/sales-data-hub-integrity.tsx",
+  "utf8",
+);
 const migration = await readFile("supabase/cc-analytics-sales-entry.sql", "utf8");
 const lintConfig = await readFile("eslint.config.mjs", "utf8");
 
@@ -32,10 +36,11 @@ test("flexible detector recognizes heterogeneous sales fields", () => {
   }
 });
 
-test("navigation exposes sales entry to authorized operational roles", () => {
-  assert.match(root, /Ingreso de ventas/);
-  assert.match(root, /SalesDataHub/);
-  assert.match(root, /Supervisor/);
+test("native navigation exposes sales entry to authorized operational roles", () => {
+  assert.match(app, /Ingreso de ventas/);
+  assert.match(app, /SalesDataHubV2/);
+  assert.match(app, /salesOperationsAllowed/);
+  assert.match(integrity, /no guardará ventas huérfanas/);
 });
 
 test("database migration preserves seller history and announced sales", () => {
