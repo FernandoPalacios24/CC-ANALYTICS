@@ -19,3 +19,12 @@ button { cursor:pointer; }
 .chart-tooltip { background:#121218!important; border:1px solid #30243d!important; border-radius:12px!important; box-shadow:0 12px 30px #0008!important; }
 .animate-in { animation:fadeUp .36s ease both; }
 @keyframes fadeUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
+
+/* Presentación en vivo: una columna uniforme por cada supervisor existente. */
+@media (min-width: 901px) and (min-aspect-ratio: 4/3) {
+  .supervisor-grid {
+    grid-template-columns: none !important;
+    grid-auto-flow: column !important;
+    grid-auto-columns: minmax(0, 1fr) !important;
+  }
+}
