@@ -3,12 +3,17 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const dashboard = await readFile(
-  "components/live-sales-area-dashboard.tsx",
+  "components/real-sales-dashboard.tsx",
   "utf8",
 );
 const hub = await readFile("components/sales-data-hub-v2.tsx", "utf8");
 const matching = await readFile("lib/seller-matching.ts", "utf8");
 const root = await readFile("components/analytics-root.tsx", "utf8");
+const page = await readFile("app/page.tsx", "utf8");
+const controller = await readFile(
+  "components/production-module-controller.tsx",
+  "utf8",
+);
 const migration = await readFile(
   "supabase/sales-snapshot-replacement-and-units.sql",
   "utf8",
@@ -18,12 +23,16 @@ test("dashboard uses real sales data and explicit zero-safe calculations", () =>
   for (const marker of [
     'from("analytics_sales")',
     'from("analytics_announced_sales")',
-    "currentContracts",
-    "currentAmount",
-    "No hay ventas reportadas para este período",
+    'from("analytics_seller_goals")',
+    "contracts",
+    "billed",
+    "No hay ventas reportadas para el período",
     "sale_units",
   ]) {
-    assert.match(dashboard, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(
+      dashboard,
+      new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
   }
 });
 
@@ -53,10 +62,15 @@ test("seller matching tolerates name variants and protects ambiguity", () => {
   }
 });
 
-test("root connects the real dashboard and upgraded sales hub", () => {
-  assert.match(root, /LiveSalesAreaDashboard/);
+test("root keeps sales operations while a single production controller owns dashboards", () => {
   assert.match(root, /SalesDataHubV2/);
-  assert.match(root, /cc-live-sales-host/);
+  assert.doesNotMatch(root, /LiveSalesAreaDashboard/);
+  assert.doesNotMatch(root, /cc-live-sales-host/);
+  assert.match(page, /ProductionModuleController/);
+  assert.doesNotMatch(page, /InitialDashboardController/);
+  assert.match(controller, /RealSalesDashboard/);
+  assert.match(controller, /RealExecutiveDashboard/);
+  assert.match(controller, /RealDepartmentDashboard/);
 });
 
 test("database migration replaces imported rows but preserves manual sales", () => {
