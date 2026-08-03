@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   FileSpreadsheet,
@@ -11,7 +11,6 @@ import {
   X,
 } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
-import { LiveSalesAreaDashboard } from "@/components/live-sales-area-dashboard";
 import { SalesCorrectionCenter } from "@/components/sales-correction-center";
 import { SalesDataHubV2 } from "@/components/sales-data-hub-v2";
 import type { Profile } from "@/components/analytics-app-v2";
@@ -20,29 +19,8 @@ import {
   mapAnalyticsProfile,
   type AnalyticsProfileRow,
 } from "@/lib/analytics-profile";
+import { salesDepartments } from "@/lib/production-platform";
 import { supabase, supabaseConfigured } from "@/lib/supabase-client";
-
-function currentMonthLabel() {
-  return new Intl.DateTimeFormat("es-HN", {
-    month: "long",
-    year: "numeric",
-  })
-    .format(new Date())
-    .replace(/^./, (value) => value.toUpperCase());
-}
-
-function recentMonthLabels(total = 24) {
-  const now = new Date();
-  return Array.from({ length: total }, (_, index) => {
-    const date = new Date(now.getFullYear(), now.getMonth() - index, 1);
-    return new Intl.DateTimeFormat("es-HN", {
-      month: "long",
-      year: "numeric",
-    })
-      .format(date)
-      .replace(/^./, (value) => value.toUpperCase());
-  });
-}
 
 export function AnalyticsRoot() {
   const [presentationAuthorized, setPresentationAuthorized] = useState(false);
@@ -54,10 +32,6 @@ export function AnalyticsRoot() {
   const [salesOpen, setSalesOpen] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [navHost, setNavHost] = useState<HTMLElement | null>(null);
-  const [currentHeading, setCurrentHeading] = useState("");
-  const [liveDashboardHost, setLiveDashboardHost] =
-    useState<HTMLElement | null>(null);
-  const initializedMonthForUser = useRef<string | null>(null);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -73,7 +47,6 @@ export function AnalyticsRoot() {
         setProfiles([]);
         setSalesOpen(false);
         setCorrectionOpen(false);
-        initializedMonthForUser.current = null;
         return;
       }
 
@@ -105,31 +78,33 @@ export function AnalyticsRoot() {
         }
       });
 
+      const isSalesScope = salesDepartments.includes(mapped.department);
+      const isAdmin = mapped.role === "Administrador";
+      const canOperateSales =
+        mapped.active &&
+        (isAdmin ||
+          (isSalesScope &&
+            ["Líder de departamento", "Supervisor", "Operador"].includes(
+              mapped.role,
+            )));
+      const canCorrectSales =
+        mapped.active &&
+        (isAdmin ||
+          (isSalesScope &&
+            ["Líder de departamento", "Supervisor"].includes(mapped.role)));
+
       setProfile(mapped);
       setProfiles(
         mappedDirectory.some((item) => item.id === mapped.id)
           ? mappedDirectory
           : [mapped, ...mappedDirectory],
       );
+      setSalesAuthorized(canOperateSales);
+      setCorrectionAuthorized(canCorrectSales);
       setPresentationAuthorized(
         mapped.active &&
-          (mapped.role === "Líder de departamento" ||
-            mapped.role === "Administrador"),
-      );
-      setSalesAuthorized(
-        mapped.active &&
-          [
-            "Administrador",
-            "Líder de departamento",
-            "Supervisor",
-            "Operador",
-          ].includes(mapped.role),
-      );
-      setCorrectionAuthorized(
-        mapped.active &&
-          ["Administrador", "Líder de departamento", "Supervisor"].includes(
-            mapped.role,
-          ),
+          (isAdmin ||
+            (isSalesScope && mapped.role === "Líder de departamento")),
       );
     }
 
@@ -146,8 +121,8 @@ export function AnalyticsRoot() {
 
   useEffect(() => {
     const detect = () => {
-      const heading = document.querySelector("header h1")?.textContent?.trim() || "";
-      setCurrentHeading(heading);
+      const heading =
+        document.querySelector("header h1")?.textContent?.trim() || "";
       setInsideReports(heading === "Reportes");
       setNavHost(document.querySelector<HTMLElement>("aside nav"));
     };
@@ -160,105 +135,6 @@ export function AnalyticsRoot() {
     });
     return () => observer.disconnect();
   }, []);
-
-  useEffect(() => {
-    if (!profile || currentHeading !== "Dashboard de mi área") return;
-
-    let optionObserver: MutationObserver | null = null;
-
-    const prepareMonthSelector = () => {
-      const select = document.querySelector<HTMLSelectElement>(
-        "main > div.mb-5 select",
-      );
-      if (!select) return false;
-
-      const months = recentMonthLabels();
-      const existing = new Set(
-        Array.from(select.options).map((option) => option.value),
-      );
-
-      months.forEach((month, index) => {
-        if (existing.has(month)) return;
-        const option = new Option(month, month);
-        if (index === 0 && select.options.length > 1) {
-          select.insertBefore(option, select.options[1]);
-        } else {
-          select.add(option);
-        }
-        existing.add(month);
-      });
-
-      if (initializedMonthForUser.current !== profile.id) {
-        const currentMonth = currentMonthLabel();
-        select.value = currentMonth;
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-        initializedMonthForUser.current = profile.id;
-      }
-
-      if (!optionObserver) {
-        optionObserver = new MutationObserver(() => {
-          const currentMonth = currentMonthLabel();
-          if (
-            !Array.from(select.options).some(
-              (option) => option.value === currentMonth,
-            )
-          ) {
-            select.insertBefore(
-              new Option(currentMonth, currentMonth),
-              select.options[1] || null,
-            );
-          }
-        });
-        optionObserver.observe(select, { childList: true });
-      }
-
-      return true;
-    };
-
-    prepareMonthSelector();
-    const firstRetry = window.setTimeout(prepareMonthSelector, 150);
-    const secondRetry = window.setTimeout(prepareMonthSelector, 500);
-
-    return () => {
-      window.clearTimeout(firstRetry);
-      window.clearTimeout(secondRetry);
-      optionObserver?.disconnect();
-    };
-  }, [currentHeading, profile]);
-
-  useEffect(() => {
-    const existingHost = document.getElementById("cc-live-sales-host");
-    const showRealSalesDashboard =
-      currentHeading === "Dashboard de mi área" &&
-      profile?.department === "Ventas Digitales";
-
-    if (!showRealSalesDashboard) {
-      existingHost?.remove();
-      setLiveDashboardHost(null);
-      return;
-    }
-
-    const main = document.querySelector<HTMLElement>("main");
-    if (!main) return;
-
-    const legacy = main.querySelector<HTMLElement>(":scope > .animate-in");
-    const host =
-      existingHost ||
-      Object.assign(document.createElement("div"), {
-        id: "cc-live-sales-host",
-      });
-
-    if (!existingHost) {
-      main.insertBefore(host, legacy || main.querySelector("footer"));
-    }
-    if (legacy) legacy.style.display = "none";
-    setLiveDashboardHost(host);
-
-    return () => {
-      if (legacy) legacy.style.display = "";
-      host.remove();
-    };
-  }, [currentHeading, profile?.department]);
 
   function openPresentation() {
     const popup = window.open(
@@ -273,12 +149,6 @@ export function AnalyticsRoot() {
   return (
     <>
       <AuthShell />
-
-      {profile && liveDashboardHost && !salesOpen && !correctionOpen &&
-        createPortal(
-          <LiveSalesAreaDashboard profile={profile} />,
-          liveDashboardHost,
-        )}
 
       {salesAuthorized && navHost &&
         createPortal(
