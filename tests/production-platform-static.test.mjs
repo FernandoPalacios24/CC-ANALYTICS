@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const page = await readFile("app/page.tsx", "utf8");
-const controller = await readFile(
-  "components/production-module-controller.tsx",
+const auth = await readFile("components/auth-shell.tsx", "utf8");
+const application = await readFile(
+  "components/production-analytics-app.tsx",
   "utf8",
 );
 const departmentDashboard = await readFile(
@@ -23,6 +24,18 @@ const alertCenter = await readFile(
   "components/real-alert-center.tsx",
   "utf8",
 );
+const userAccess = await readFile(
+  "components/production-user-access.tsx",
+  "utf8",
+);
+const auditCenter = await readFile(
+  "components/production-audit-center.tsx",
+  "utf8",
+);
+const goalsCenter = await readFile(
+  "components/sales-goals-center.tsx",
+  "utf8",
+);
 const platform = await readFile("lib/production-platform.ts", "utf8");
 const metricsMigration = await readFile(
   "supabase/department-metrics-production.sql",
@@ -34,12 +47,15 @@ const importMigration = await readFile(
 );
 const copilot = await readFile("app/api/report-copilot/route.ts", "utf8");
 
-test("production entry uses one dashboard controller", () => {
-  assert.match(page, /ProductionModuleController/);
+test("production entry renders one native application without DOM replacement controllers", () => {
+  assert.match(page, /AuthShell/);
+  assert.doesNotMatch(page, /ProductionModuleController/);
   assert.doesNotMatch(page, /InitialDashboardController/);
-  assert.match(controller, /cc-production-module-host/);
-  assert.match(controller, /canSeeNav/);
-  assert.match(controller, /currentMonthLabel/);
+  assert.doesNotMatch(page, /AnalyticsRoot/);
+  assert.match(auth, /ProductionAnalyticsApp/);
+  assert.doesNotMatch(auth, /<AnalyticsApp/);
+  assert.match(application, /canSeeNav/);
+  assert.match(application, /currentMonthLabel/);
 });
 
 test("visible production modules read Supabase instead of demo fixtures", () => {
@@ -47,11 +63,14 @@ test("visible production modules read Supabase instead of demo fixtures", () => 
     assert.match(source, /from\("analytics_/);
     assert.doesNotMatch(source, /@\/lib\/data/);
   }
-  assert.match(controller, /RealDepartmentDashboard/);
-  assert.match(controller, /RealExecutiveDashboard/);
-  assert.match(controller, /RealSalesDashboard/);
-  assert.match(controller, /RealAlertCenter/);
-  assert.match(controller, /DepartmentImportCenter/);
+  assert.match(application, /RealDepartmentDashboard/);
+  assert.match(application, /RealExecutiveDashboard/);
+  assert.match(application, /RealSalesDashboard/);
+  assert.match(application, /RealAlertCenter/);
+  assert.match(application, /DepartmentImportCenter/);
+  assert.match(application, /ProductionUserAccess/);
+  assert.match(application, /ProductionAuditCenter/);
+  assert.match(application, /SalesGoalsCenter/);
 });
 
 test("department imports persist rows, replace previous cuts and feed metrics", () => {
@@ -79,6 +98,16 @@ test("metrics core includes RLS, audit, targets and profile completeness", () =>
   ]) {
     assert.match(metricsMigration, new RegExp(marker));
   }
+});
+
+test("users, audit and goals are native functional modules", () => {
+  assert.match(userAccess, /Contraseña temporal/);
+  assert.match(userAccess, /onUpdate/);
+  assert.match(userAccess, /managerCandidates/);
+  assert.match(auditCenter, /analytics_audit_log/);
+  assert.match(auditCenter, /Exportar CSV/);
+  assert.match(goalsCenter, /analytics_set_seller_goal/);
+  assert.match(goalsCenter, /Meta del supervisor/);
 });
 
 test("module registry assigns a purpose and scope to every visible area", () => {
