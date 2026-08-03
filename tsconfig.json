@@ -19,6 +19,9 @@
       }
     ],
     "paths": {
+      "@/components/sales-data-hub-v2": [
+        "./components/sales-data-hub-integrity.tsx"
+      ],
       "@/lib/sales-import-detection": [
         "./lib/sales-import-detection-safe.ts"
       ],

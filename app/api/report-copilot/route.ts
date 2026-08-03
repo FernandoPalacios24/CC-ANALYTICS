@@ -119,27 +119,31 @@ const reportSchema = {
   ],
 };
 
+function jsonError(error: string, status: number) {
+  return NextResponse.json({ error }, { status });
+}
+
 export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey)
-    return NextResponse.json(
-      { error: "OpenAI no configurado" },
-      { status: 503 },
+  if (!apiKey) return jsonError("OpenAI no está configurado.", 503);
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey =
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    return jsonError(
+      "La conexión independiente de CC Analytics está incompleta.",
+      503,
     );
+  }
 
   const token = request.headers
     .get("authorization")
     ?.replace(/^Bearer\s+/i, "")
     .trim();
-  if (!token)
-    return NextResponse.json({ error: "Sesión requerida" }, { status: 401 });
+  if (!token) return jsonError("Sesión requerida.", 401);
 
-  const supabaseUrl =
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    "https://vvuxlzxbgnilzdtomyod.supabase.co";
-  const supabaseKey =
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    "sb_publishable_BdePRThQK0YafjmpN3vbow_EGEySxf4";
   const authClient = createClient(supabaseUrl, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
@@ -147,15 +151,23 @@ export async function POST(request: Request) {
     data: { user },
     error: authError,
   } = await authClient.auth.getUser(token);
-  if (authError || !user)
-    return NextResponse.json({ error: "Sesión inválida" }, { status: 401 });
+  if (authError || !user) return jsonError("Sesión inválida.", 401);
 
-  const body = (await request.json()) as {
+  let body: {
     prompt?: string;
     context?: Record<string, unknown>;
   };
-  if (!body.prompt?.trim())
-    return NextResponse.json({ error: "Instrucción requerida" }, { status: 400 });
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return jsonError("Solicitud inválida.", 400);
+  }
+
+  const prompt = body.prompt?.trim() || "";
+  if (!prompt) return jsonError("Instrucción requerida.", 400);
+  if (prompt.length > 8_000) {
+    return jsonError("La instrucción supera el límite permitido.", 400);
+  }
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -164,7 +176,7 @@ export async function POST(request: Request) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_REPORT_MODEL || "gpt-5.6-sol",
+      model: process.env.OPENAI_REPORT_MODEL || "gpt-5.2",
       store: false,
       input: [
         {
@@ -175,7 +187,7 @@ export async function POST(request: Request) {
         {
           role: "user",
           content: JSON.stringify({
-            request: body.prompt,
+            request: prompt,
             availableContext: body.context || {},
             formulaSyntax:
               "Opcional: SUMA([Campo]), PROMEDIO([Campo]), UNICOS([Campo]), CONTEO(), META y operadores + - * /.",
@@ -196,9 +208,11 @@ export async function POST(request: Request) {
   if (!response.ok) {
     const detail = await response.text();
     console.error("OpenAI report copilot failed", response.status, detail);
-    return NextResponse.json(
-      { error: "No se pudo crear el reporte con OpenAI" },
-      { status: 502 },
+    return jsonError(
+      response.status === 429
+        ? "El copiloto alcanzó temporalmente su límite de uso."
+        : "No se pudo crear el reporte con OpenAI.",
+      response.status === 429 ? 429 : 502,
     );
   }
 
@@ -211,11 +225,13 @@ export async function POST(request: Request) {
   const outputText = result.output
     ?.flatMap((item) => item.content || [])
     .find((item) => item.type === "output_text")?.text;
-  if (!outputText)
-    return NextResponse.json(
-      { error: "OpenAI no devolvió una composición" },
-      { status: 502 },
-    );
+  if (!outputText) {
+    return jsonError("OpenAI no devolvió una composición.", 502);
+  }
 
-  return NextResponse.json({ definition: JSON.parse(outputText) });
+  try {
+    return NextResponse.json({ definition: JSON.parse(outputText) });
+  } catch {
+    return jsonError("OpenAI devolvió una composición inválida.", 502);
+  }
 }
