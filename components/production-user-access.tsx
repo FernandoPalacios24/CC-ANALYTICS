@@ -72,7 +72,10 @@ function profilePatch(accessProfile: AccessProfile, current?: Profile) {
     return {
       role: "Analista" as Role,
       jobProfile: "Community Manager",
-      department: "Marketing" as Department,
+      department:
+        current?.department === "Administración"
+          ? ("Ventas Digitales" as Department)
+          : current?.department || ("Ventas Digitales" as Department),
       zone: current?.zone === "Nacional" ? "Zona Norte" : current?.zone || "Zona Norte",
       managerId: null,
     };
@@ -174,7 +177,7 @@ export function ProductionUserAccess({
         <div>
           <p className="text-[10px] font-black uppercase tracking-[.2em] text-purple-300">Administración protegida</p>
           <h2 className="mt-1 text-xl font-black">Usuarios y perfiles</h2>
-          <p className="mt-1 text-xs text-zinc-500">Community Manager ahora es un perfil independiente y reporta directamente al líder de Marketing.</p>
+          <p className="mt-1 text-xs text-zinc-500">Community Manager puede pertenecer a cualquier departamento y reporta al líder de esa misma área.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar usuario..." className="rounded-xl border border-white/[.08] bg-[#111116] px-4 py-2.5 text-xs outline-none" />
@@ -211,8 +214,8 @@ export function ProductionUserAccess({
                       </select>
                     </td>
                     <td>
-                      <select value={row.department} disabled={["Administrador", "Community Manager"].includes(accessProfile)} onChange={(event) => patch(row.id, { department: event.target.value as Department, managerId: null })} className={selectClass}>
-                        {(accessProfile === "Administrador" ? ["Administración" as Department] : accessProfile === "Community Manager" ? ["Marketing" as Department] : departments).map((value) => <option key={value}>{value}</option>)}
+                      <select value={row.department} disabled={accessProfile === "Administrador"} onChange={(event) => patch(row.id, { department: event.target.value as Department, managerId: null })} className={selectClass}>
+                        {(accessProfile === "Administrador" ? ["Administración" as Department] : departments).map((value) => <option key={value}>{value}</option>)}
                       </select>
                     </td>
                     <td>
@@ -291,10 +294,10 @@ function CreateUserModal({ profiles, onClose, onCreate }: {
           <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">Contraseña temporal<div className="relative mt-2"><input type={showPassword ? "text" : "password"} value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} className={`${inputClass} pr-11`} /><button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-3 text-zinc-500">{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
           <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">Confirmar contraseña<input type={showPassword ? "text" : "password"} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} className={`mt-2 ${inputClass}`} /></label>
           <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">Perfil de acceso<select value={accessProfile} onChange={(event) => chooseProfile(event.target.value as AccessProfile)} className={`mt-2 ${inputClass}`}>{accessProfiles.map((value) => <option key={value}>{value}</option>)}</select></label>
-          <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">Departamento<select value={draft.department} disabled={["Administrador", "Community Manager"].includes(accessProfile)} onChange={(event) => setDraft({ ...draft, department: event.target.value as Department, managerId: null })} className={`mt-2 ${inputClass} disabled:opacity-60`}>{(accessProfile === "Administrador" ? ["Administración" as Department] : accessProfile === "Community Manager" ? ["Marketing" as Department] : departments).map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">Departamento<select value={draft.department} disabled={accessProfile === "Administrador"} onChange={(event) => setDraft({ ...draft, department: event.target.value as Department, managerId: null })} className={`mt-2 ${inputClass} disabled:opacity-60`}>{(accessProfile === "Administrador" ? ["Administración" as Department] : departments).map((value) => <option key={value}>{value}</option>)}</select></label>
           <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">Zona<select value={draft.zone} disabled={accessProfile === "Administrador"} onChange={(event) => setDraft({ ...draft, zone: event.target.value, managerId: null })} className={`mt-2 ${inputClass} disabled:opacity-60`}>{zones.map((value) => <option key={value}>{value}</option>)}</select></label>
           {!["Administrador", "Líder de departamento"].includes(accessProfile) && <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">Reporta a<select value={draft.managerId || ""} onChange={(event) => setDraft({ ...draft, managerId: event.target.value || null })} className={`mt-2 ${inputClass}`}><option value="">Seleccionar superior</option>{managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.name} · {manager.role} · {manager.zone}</option>)}</select></label>}
-          <div className="rounded-xl border border-purple-400/15 bg-purple-500/[.05] p-4 text-[10px] leading-5 text-zinc-400 sm:col-span-2"><UserCog className="mr-2 inline text-purple-300" size={14} />Community Manager queda como perfil propio de Marketing, con acceso de análisis y reporte directo al líder del departamento.</div>
+          <div className="rounded-xl border border-purple-400/15 bg-purple-500/[.05] p-4 text-[10px] leading-5 text-zinc-400 sm:col-span-2"><UserCog className="mr-2 inline text-purple-300" size={14} />Community Manager puede asignarse a cualquier departamento y reporta directamente al líder correspondiente de esa misma área y zona.</div>
           {error && <p className="rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-3 text-xs text-rose-300 sm:col-span-2"><AlertTriangle className="mr-2 inline" size={14} />{error}</p>}
           <button disabled={saving} className="flex items-center justify-center gap-2 rounded-xl bg-purple-600 p-3 text-xs font-black sm:col-span-2 disabled:opacity-50">{saving ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}Crear usuario</button>
         </div>
