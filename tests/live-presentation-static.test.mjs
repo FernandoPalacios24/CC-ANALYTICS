@@ -4,12 +4,12 @@ import test from "node:test";
 
 const page = await readFile("app/presentacion/page.tsx", "utf8");
 const presentation = await readFile("components/live-sales-presentation-v2.tsx", "utf8");
-const calendarProjection = await readFile("components/live-sales-presentation-v3.tsx", "utf8");
+const stableEntry = await readFile("components/live-sales-presentation-v3.tsx", "utf8");
 const calendarCenter = await readFile("components/business-calendar-center.tsx", "utf8");
 
-test("presentation route uses the calendar-aware production live screen", () => {
+test("presentation route uses the stable production live screen", () => {
   assert.match(page, /LiveSalesPresentationV3/);
-  assert.match(calendarProjection, /LiveSalesPresentationV2/);
+  assert.match(stableEntry, /LiveSalesPresentationV2/);
   assert.doesNotMatch(page, /LiveSalesPresentation\s/);
 });
 
@@ -23,19 +23,18 @@ test("presentation counts sale units and reads seller goals", () => {
   assert.doesNotMatch(presentation, /manualGoal/);
 });
 
-test("projection uses working days while sales remain counted", () => {
-  assert.match(calendarProjection, /analytics_working_day_stats/);
-  assert.match(calendarProjection, /elapsed_working_days/);
-  assert.match(calendarProjection, /total_working_days/);
-  assert.match(calendarProjection, /analytics_sales/);
+test("business calendar remains editable without controlling the live screen", () => {
   assert.match(calendarCenter, /domingos quedan fuera/i);
   assert.match(calendarCenter, /analytics_set_business_day/);
+  assert.doesNotMatch(stableEntry, /analytics_working_day_stats/);
+  assert.doesNotMatch(stableEntry, /analytics_business_calendar/);
+  assert.doesNotMatch(stableEntry, /MutationObserver/);
 });
 
-test("presentation refreshes on sales goal and calendar changes", () => {
+test("presentation refreshes only on sales and goal changes", () => {
   assert.match(presentation, /table: "analytics_sales"/);
   assert.match(presentation, /table: "analytics_seller_goals"/);
-  assert.match(calendarProjection, /analytics_business_calendar/);
+  assert.doesNotMatch(stableEntry, /postgres_changes/);
   assert.match(presentation, /TIEMPO REAL/);
 });
 
