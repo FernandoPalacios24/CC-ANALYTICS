@@ -99,6 +99,7 @@ type PreviewRow = {
   sale: CanonicalSale;
   match: SellerMatch<SellerRecord>;
   units: number;
+  originalTotalAmount: number | null;
   totalAmount: number | null;
   key: string;
 };
@@ -170,6 +171,14 @@ function money(value: number) {
   return new Intl.NumberFormat("es-HN", {
     style: "currency",
     currency: "HNL",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function dollars(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
     maximumFractionDigits: 2,
   }).format(value);
 }
@@ -293,6 +302,8 @@ export function SalesDataHubV2({
   const [importConfidence, setImportConfidence] = useState(0);
   const [excludedRows, setExcludedRows] = useState(0);
   const [manualMatches, setManualMatches] = useState<Record<string, string>>({});
+  const [importAmountsInUsd, setImportAmountsInUsd] = useState(false);
+  const [exchangeRate, setExchangeRate] = useState("26.50");
 
   const [manualSellerId, setManualSellerId] = useState("");
   const [manualDate, setManualDate] = useState(today());
@@ -624,15 +635,27 @@ export function SalesDataHubV2({
             }
           : automatic;
         const units = detectedSaleUnits(sale);
+        const originalTotalAmount = normalizedTotalAmount(sale, units);
+        const rate = Number(exchangeRate);
         return {
           sale,
           match,
           units,
-          totalAmount: normalizedTotalAmount(sale, units),
+          originalTotalAmount,
+          totalAmount:
+            importAmountsInUsd && originalTotalAmount !== null && rate > 0
+              ? originalTotalAmount * rate
+              : originalTotalAmount,
           key,
         };
       }),
-    [importRows, manualMatches, selectedSellers],
+    [
+      exchangeRate,
+      importAmountsInUsd,
+      importRows,
+      manualMatches,
+      selectedSellers,
+    ],
   );
 
   const unresolved = importPreview.filter((row) => !row.match.seller);
@@ -648,6 +671,11 @@ export function SalesDataHubV2({
     if (!selectedSupervisor || !importPreview.length) return;
     if (importStart > importEnd) {
       setNotice("ERROR: El rango de actualización no es válido.");
+      return;
+    }
+    const rate = Number(exchangeRate);
+    if (importAmountsInUsd && (!Number.isFinite(rate) || rate <= 0)) {
+      setNotice("ERROR: Ingresa una tasa de cambio válida.");
       return;
     }
 
@@ -694,6 +722,8 @@ export function SalesDataHubV2({
             ...sale.sourceRow,
             __sale_units: units,
             __snapshot_as_of: importEnd,
+            __source_currency: importAmountsInUsd ? "USD" : "HNL",
+            __exchange_rate_hnl: importAmountsInUsd ? rate : 1,
           },
           created_by: profile.id,
         })),
@@ -708,7 +738,8 @@ export function SalesDataHubV2({
     if (importKind === "posted") {
       for (const batch of chunk(importPreview)) {
         const { error } = await supabase.from("analytics_sales").insert(
-          batch.map(({ sale, match, units, totalAmount }) => ({
+          batch.map(
+            ({ sale, match, units, originalTotalAmount, totalAmount }) => ({
             source_import_id: created.id,
             department:
               match.seller?.department || selectedSupervisor.department,
@@ -730,7 +761,10 @@ export function SalesDataHubV2({
             is_primary: sale.isPrimary,
             contract_service: sale.contractService,
             amount_billed: totalAmount,
-            commission_income: sale.commissionIncome,
+            commission_income:
+              sale.commissionIncome === null
+                ? null
+                : sale.commissionIncome * (importAmountsInUsd ? rate : 1),
             sale_units: units,
             snapshot_as_of: importEnd,
             source_type: "imported",
@@ -739,14 +773,20 @@ export function SalesDataHubV2({
               ...sale.detectedFields,
               seller_match_method: match.method,
               seller_match_score: match.score.toFixed(4),
+              source_currency: importAmountsInUsd ? "USD" : "HNL",
+              exchange_rate_hnl: String(importAmountsInUsd ? rate : 1),
             },
             payload: {
               ...sale.sourceRow,
               __sale_units: units,
               __original_seller_name: sale.sellerName,
+              __original_amount: originalTotalAmount,
+              __source_currency: importAmountsInUsd ? "USD" : "HNL",
+              __exchange_rate_hnl: importAmountsInUsd ? rate : 1,
             },
             created_by: profile.id,
-          })),
+          }),
+          ),
         );
         if (error) {
           setNotice(`ERROR: No se guardaron las ventas: ${error.message}`);
@@ -759,7 +799,8 @@ export function SalesDataHubV2({
         const { error } = await supabase
           .from("analytics_announced_sales")
           .insert(
-            batch.map(({ sale, match, units, totalAmount }) => ({
+            batch.map(
+              ({ sale, match, units, originalTotalAmount, totalAmount }) => ({
               source_import_id: created.id,
               seller_id: match.seller?.id || null,
               seller_name: match.seller?.full_name || sale.sellerName,
@@ -783,15 +824,21 @@ export function SalesDataHubV2({
                 ...sale.sourceRow,
                 __sale_units: units,
                 __original_seller_name: sale.sellerName,
+                __original_amount: originalTotalAmount,
+                __source_currency: importAmountsInUsd ? "USD" : "HNL",
+                __exchange_rate_hnl: importAmountsInUsd ? rate : 1,
               },
               import_confidence: sale.confidence,
               detected_fields: {
                 ...sale.detectedFields,
                 seller_match_method: match.method,
                 seller_match_score: match.score.toFixed(4),
+                source_currency: importAmountsInUsd ? "USD" : "HNL",
+                exchange_rate_hnl: String(importAmountsInUsd ? rate : 1),
               },
               created_by: profile.id,
-            })),
+            }),
+            ),
           );
         if (error) {
           setNotice(
@@ -1507,6 +1554,41 @@ export function SalesDataHubV2({
                     </div>
                   </div>
 
+                  <div className="grid gap-3 rounded-2xl border border-cyan-400/15 bg-cyan-500/[.04] p-4 md:grid-cols-[1fr_260px] md:items-center">
+                    <label className="flex cursor-pointer items-center justify-between gap-4">
+                      <span>
+                        <span className="block text-xs font-black text-cyan-200">
+                          Los montos del archivo están en dólares
+                        </span>
+                        <span className="mt-1 block text-[10px] leading-5 text-zinc-500">
+                          Convierte los valores a lempiras antes de guardarlos.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={importAmountsInUsd}
+                        onChange={(event) =>
+                          setImportAmountsInUsd(event.target.checked)
+                        }
+                        className="h-5 w-5 accent-cyan-500"
+                      />
+                    </label>
+                    {importAmountsInUsd && (
+                      <label className="text-[10px] font-black uppercase tracking-wider text-zinc-500">
+                        Tasa de cambio · L por US$1
+                        <input
+                          required
+                          type="number"
+                          min="0.0001"
+                          step="0.0001"
+                          value={exchangeRate}
+                          onChange={(event) => setExchangeRate(event.target.value)}
+                          className="mt-2 w-full rounded-xl border border-cyan-400/20 bg-[#111116] p-3 text-xs text-cyan-200"
+                        />
+                      </label>
+                    )}
+                  </div>
+
                   <div
                     onClick={() => !saving && fileRef.current?.click()}
                     onDragOver={(event) => event.preventDefault()}
@@ -1560,11 +1642,18 @@ export function SalesDataHubV2({
                         {importFile} · hoja {importSheet} ·{" "}
                         {totalImportUnits.toLocaleString("es-HN")} ventas ·
                         confianza de columnas{" "}
-                        {Math.round(importConfidence * 100)}%
+                        {Math.round(importConfidence * 100)}% · montos en{" "}
+                        {importAmountsInUsd
+                          ? `USD convertidos a HNL a ${Number(exchangeRate || 0).toFixed(4)}`
+                          : "HNL"}
                       </p>
                     </div>
                     <button
-                      disabled={saving || !selectedSupervisor}
+                      disabled={
+                        saving ||
+                        !selectedSupervisor ||
+                        (importAmountsInUsd && Number(exchangeRate) <= 0)
+                      }
                       onClick={() => void confirmImport()}
                       className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black disabled:opacity-50"
                     >
@@ -1624,7 +1713,7 @@ export function SalesDataHubV2({
                           <th>Coincidencia</th>
                           <th>Ventas</th>
                           <th>Fecha</th>
-                          <th>Monto total</th>
+                          <th>Monto total en lempiras</th>
                           <th>Ciudad</th>
                         </tr>
                       </thead>
@@ -1667,7 +1756,20 @@ export function SalesDataHubV2({
                             <td>
                               {row.totalAmount === null
                                 ? "—"
-                                : money(row.totalAmount)}
+                                : (
+                                  <>
+                                    <span className="font-bold text-zinc-200">
+                                      {money(row.totalAmount)}
+                                    </span>
+                                    {importAmountsInUsd &&
+                                      row.originalTotalAmount !== null && (
+                                        <span className="mt-1 block text-[9px] text-cyan-300">
+                                          {dollars(row.originalTotalAmount)} ×{" "}
+                                          {Number(exchangeRate).toFixed(4)}
+                                        </span>
+                                      )}
+                                  </>
+                                )}
                             </td>
                             <td>{row.sale.city || "—"}</td>
                           </tr>
