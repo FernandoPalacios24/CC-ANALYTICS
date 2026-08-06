@@ -279,6 +279,8 @@ export function SalesDataHubV2({
   const [sellerName, setSellerName] = useState("");
   const [sellerCode, setSellerCode] = useState("");
   const [hireDate, setHireDate] = useState(today());
+  const [sellerIsActive, setSellerIsActive] = useState(true);
+  const [sellerExitDate, setSellerExitDate] = useState("");
   const [probationDays, setProbationDays] = useState(90);
 
   const [importKind, setImportKind] = useState<ImportKind>("posted");
@@ -430,15 +432,24 @@ export function SalesDataHubV2({
       setNotice("ERROR: Selecciona un supervisor.");
       return;
     }
+    if (!sellerIsActive && (!sellerExitDate || sellerExitDate <= hireDate)) {
+      setNotice(
+        "ERROR: La fecha de salida debe ser posterior a la fecha de entrada.",
+      );
+      return;
+    }
     setSaving(true);
     setNotice("");
-    const { error } = await supabase.rpc("analytics_save_seller", {
+    const { error } = await supabase.rpc("analytics_save_seller_with_exit", {
       target_id: null,
       target_supervisor_id: supervisorId,
       target_full_name: sellerName,
       target_seller_code: sellerCode || null,
       target_hire_date: hireDate,
       target_probation_days: probationDays,
+      target_inactive_effective_date: sellerIsActive
+        ? null
+        : sellerExitDate,
     });
     if (error) {
       setNotice(`ERROR: ${error.message}`);
@@ -447,6 +458,8 @@ export function SalesDataHubV2({
       setSellerName("");
       setSellerCode("");
       setHireDate(today());
+      setSellerIsActive(true);
+      setSellerExitDate("");
       setProbationDays(90);
       await refresh();
     }
@@ -1249,6 +1262,40 @@ export function SalesDataHubV2({
                         className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
                       />
                     </label>
+                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-emerald-400/15 bg-emerald-500/[.05] p-3">
+                      <span>
+                        <span className="block text-[10px] font-black uppercase tracking-wider text-emerald-300">
+                          EVR activo actualmente
+                        </span>
+                        <span className="mt-1 block text-[9px] leading-4 text-zinc-600">
+                          Desmarca para registrar un vendedor histórico.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={sellerIsActive}
+                        onChange={(event) => {
+                          setSellerIsActive(event.target.checked);
+                          if (event.target.checked) setSellerExitDate("");
+                        }}
+                        className="h-5 w-5 accent-emerald-500"
+                      />
+                    </label>
+                    {!sellerIsActive && (
+                      <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                        Fecha de salida
+                        <input
+                          required
+                          type="date"
+                          min={hireDate}
+                          value={sellerExitDate}
+                          onChange={(event) =>
+                            setSellerExitDate(event.target.value)
+                          }
+                          className="mt-2 w-full rounded-xl border border-rose-400/20 bg-[#111116] p-3 text-xs"
+                        />
+                      </label>
+                    )}
                     <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
                       Días de prueba
                       <input
@@ -1290,6 +1337,7 @@ export function SalesDataHubV2({
                       <tr>
                         <th className="px-5 py-3">Vendedor</th>
                         <th>Ingreso</th>
+                        <th>Salida</th>
                         <th>Fin de prueba</th>
                         <th>Condición</th>
                         <th>Estado</th>
@@ -1311,6 +1359,11 @@ export function SalesDataHubV2({
                             </p>
                           </td>
                           <td>{formatDate(seller.hire_date)}</td>
+                          <td>
+                            {seller.inactive_effective_date
+                              ? formatDate(seller.inactive_effective_date)
+                              : "—"}
+                          </td>
                           <td>{formatDate(seller.probation_end_date)}</td>
                           <td>
                             {seller.is_on_probation ? (
@@ -1353,7 +1406,7 @@ export function SalesDataHubV2({
                       {!selectedSellers.length && (
                         <tr>
                           <td
-                            colSpan={6}
+                            colSpan={7}
                             className="px-5 py-8 text-center text-zinc-600"
                           >
                             No hay vendedores registrados.
