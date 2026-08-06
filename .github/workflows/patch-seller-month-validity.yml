@@ -1,0 +1,213 @@
+name: Patch seller month validity
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch period-aware seller selection
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('components/sales-data-hub-v2.tsx')
+          text = path.read_text()
+
+          replacements = []
+          replacements.append(('''function isSellerAvailable(seller: SellerRecord) {
+  return (
+    seller.effective_status === "activo" ||
+    (seller.effective_status === "salida_pendiente" &&
+      (!seller.inactive_effective_date ||
+        seller.inactive_effective_date > today()))
+  );
+}
+''', '''function isSellerActiveOnDate(seller: SellerRecord, date: string) {
+  const cleanDate = date.slice(0, 10);
+  if (!cleanDate || seller.hire_date > cleanDate) return false;
+  return !seller.inactive_effective_date || seller.inactive_effective_date > cleanDate;
+}
+
+function isSellerActiveInMonth(seller: SellerRecord, month: string) {
+  const { start, end } = monthBounds(month);
+  return seller.hire_date < end &&
+    (!seller.inactive_effective_date || seller.inactive_effective_date >= start);
+}
+
+function isSellerAvailable(seller: SellerRecord) {
+  return isSellerActiveOnDate(seller, today());
+}
+'''))
+
+          replacements.append(('''  const activeSellers = useMemo(
+    () => selectedSellers.filter(isSellerAvailable),
+    [selectedSellers],
+  );
+''', '''  const activeSellers = useMemo(
+    () => selectedSellers.filter(isSellerAvailable),
+    [selectedSellers],
+  );
+  const manualSellers = useMemo(
+    () => selectedSellers.filter((seller) => isSellerActiveOnDate(seller, manualDate)),
+    [manualDate, selectedSellers],
+  );
+  const announcedSellers = useMemo(
+    () => selectedSellers.filter((seller) => isSellerActiveOnDate(seller, announcedDate)),
+    [announcedDate, selectedSellers],
+  );
+  const importPeriodSellers = useMemo(
+    () => selectedSellers.filter((seller) =>
+      seller.hire_date <= importEnd &&
+      (!seller.inactive_effective_date || seller.inactive_effective_date >= importStart),
+    ),
+    [importEnd, importStart, selectedSellers],
+  );
+  const reportSellers = useMemo(
+    () => selectedSellers.filter((seller) => isSellerActiveInMonth(seller, reportMonth)),
+    [reportMonth, selectedSellers],
+  );
+'''))
+
+          replacements.append(('''  useEffect(() => {
+    if (!manualSellerId && activeSellers[0]) {
+      setManualSellerId(activeSellers[0].id);
+    }
+    if (!announcedSellerId && activeSellers[0]) {
+      setAnnouncedSellerId(activeSellers[0].id);
+    }
+  }, [activeSellers, announcedSellerId, manualSellerId]);
+''', '''  useEffect(() => {
+    if (!manualSellers.some((seller) => seller.id === manualSellerId)) {
+      setManualSellerId(manualSellers[0]?.id || "");
+    }
+    if (!announcedSellers.some((seller) => seller.id === announcedSellerId)) {
+      setAnnouncedSellerId(announcedSellers[0]?.id || "");
+    }
+  }, [announcedSellerId, announcedSellers, manualSellerId, manualSellers]);
+'''))
+
+          for old, new in replacements:
+            if old not in text:
+              raise SystemExit(f'Missing expected block:\n{old[:120]}')
+            text = text.replace(old, new, 1)
+
+          old = '''        const manuallySelected = selectedSellers.find(
+          (seller) => seller.id === manualMatches[key],
+        );
+        const automatic = findBestSellerMatch(
+          sale.sellerName,
+          sale.sellerCode,
+          selectedSellers,
+        );
+'''
+          new = '''        const sellersForSaleDate = selectedSellers.filter((seller) =>
+          isSellerActiveOnDate(seller, sale.saleDate),
+        );
+        const manuallySelected = sellersForSaleDate.find(
+          (seller) => seller.id === manualMatches[key],
+        );
+        const automatic = findBestSellerMatch(
+          sale.sellerName,
+          sale.sellerCode,
+          sellersForSaleDate,
+        );
+'''
+          if old not in text: raise SystemExit('Missing import matching block')
+          text = text.replace(old, new, 1)
+
+          pairs = [
+            ('const seller = activeSellers.find((item) => item.id === manualSellerId);', 'const seller = manualSellers.find((item) => item.id === manualSellerId);'),
+            ('const seller = activeSellers.find((item) => item.id === announcedSellerId);', 'const seller = announcedSellers.find((item) => item.id === announcedSellerId);'),
+            ('      selectedSellers\n        .map((seller) => {', '      reportSellers\n        .map((seller) => {'),
+            ('      selectedSellers,\n    ],\n  );', '      reportSellers,\n    ],\n  );'),
+            ('{selectedSellers.map((seller) => (', '{importPeriodSellers.map((seller) => ('),
+          ]
+          for old, new in pairs:
+            if old not in text: raise SystemExit(f'Missing text: {old}')
+            text = text.replace(old, new, 1)
+
+          # Manual sale selector and button
+          marker = '{activeSellers.map((seller) => ('
+          if marker not in text: raise SystemExit('Missing manual seller list')
+          text = text.replace(marker, '{manualSellers.map((seller) => (', 1)
+          marker = 'disabled={saving || !activeSellers.length}'
+          if marker not in text: raise SystemExit('Missing manual button state')
+          text = text.replace(marker, 'disabled={saving || !manualSellers.length}', 1)
+
+          # Announced selector and button
+          if marker not in text: raise SystemExit('Missing announced button state')
+          text = text.replace('{activeSellers.map((seller) => (', '{announcedSellers.map((seller) => (', 1)
+          text = text.replace(marker, 'disabled={saving || !announcedSellers.length}', 1)
+
+          # Add explicit month selectors before seller fields
+          old = '''                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">
+                  Vendedor
+                  <select
+'''
+          new = '''                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">
+                  Mes de la venta
+                  <input
+                    required
+                    type="month"
+                    value={manualDate.slice(0, 7)}
+                    onChange={(event) => setManualDate(`${event.target.value}-01`)}
+                    className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">
+                  Vendedor disponible en ese mes
+                  <select
+'''
+          if old not in text: raise SystemExit('Missing manual seller label')
+          text = text.replace(old, new, 1)
+
+          old = '''                  <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                    Vendedor
+                    <select
+'''
+          new = '''                  <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                    Mes de la venta
+                    <input
+                      required
+                      type="month"
+                      value={announcedDate.slice(0, 7)}
+                      onChange={(event) => setAnnouncedDate(`${event.target.value}-01`)}
+                      className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
+                    />
+                  </label>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                    Vendedor disponible en ese mes
+                    <select
+'''
+          if old not in text: raise SystemExit('Missing announced seller label')
+          text = text.replace(old, new, 1)
+
+          old = '''                    Usa unidades acumuladas, coincidencia inteligente y período
+                    de prueba.
+'''
+          new = '''                    Solo muestra vendedores que estuvieron vigentes durante el mes seleccionado.
+'''
+          if old not in text: raise SystemExit('Missing report description')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          Path('.github/workflows/patch-seller-month-validity.yml').unlink()
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add components/sales-data-hub-v2.tsx .github/workflows/patch-seller-month-validity.yml
+          git commit -m "Filtrar vendedores por vigencia mensual"
+          git push origin HEAD:main
