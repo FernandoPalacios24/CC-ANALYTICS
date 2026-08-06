@@ -179,8 +179,15 @@ function isLikelyDate(value: unknown) {
   return Boolean(parseFlexibleDate(value));
 }
 
-function isLikelyNumber(value: unknown) {
-  return parseFlexibleNumber(value) !== null;
+function isLikelyMonetaryNumber(value: unknown) {
+  if (typeof value === "number") return Number.isFinite(value);
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  const withoutCurrency = raw
+    .replace(/(?:us\$|usd|hnl|lps?\.?)/gi, "")
+    .replace(/\s/g, "");
+  if (/[a-záéíóúñ]/i.test(withoutCurrency)) return false;
+  return parseFlexibleNumber(raw) !== null;
 }
 
 function sampleScore(
@@ -211,7 +218,7 @@ export function detectSalesColumns(rows: Record<string, unknown>[]) {
       const normalized = normalizeImportLabel(key);
       if (field === "saleDate") score += sampleScore(rows, key, isLikelyDate) * 45;
       if (field === "amountBilled" || field === "commissionIncome") {
-        score += sampleScore(rows, key, isLikelyNumber) * 28;
+        score += sampleScore(rows, key, isLikelyMonetaryNumber) * 28;
         if (/codigo|id|telefono|cuenta|contrato/.test(normalized)) score -= 80;
       }
       if (field === "sellerName" && /cliente|abonado|suscriptor/.test(normalized)) {
@@ -238,7 +245,10 @@ export function detectSalesColumns(rows: Record<string, unknown>[]) {
   if (!map.amountBilled) {
     const numericCandidate = keys
       .filter((key) => !/codigo|id|telefono|cuenta/i.test(normalizeImportLabel(key)))
-      .map((key) => ({ key, score: sampleScore(rows, key, isLikelyNumber) }))
+      .map((key) => ({
+        key,
+        score: sampleScore(rows, key, isLikelyMonetaryNumber),
+      }))
       .sort((a, b) => b.score - a.score)[0];
     if (numericCandidate?.score >= 0.8) map.amountBilled = numericCandidate.key;
   }
