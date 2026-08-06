@@ -149,6 +149,13 @@ function monthBounds(month: string) {
   return { start, end };
 }
 
+function monthEnd(month: string) {
+  const { end } = monthBounds(month);
+  const nextMonth = new Date(`${end}T12:00:00`);
+  nextMonth.setDate(nextMonth.getDate() - 1);
+  return isoDate(nextMonth);
+}
+
 function amount(value: number | string | null) {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -180,13 +187,29 @@ function formatDate(value: string | null) {
       }).format(date);
 }
 
-function isSellerAvailable(seller: SellerRecord) {
+function isSellerActiveOnDate(seller: SellerRecord, date: string) {
+  const cleanDate = date.slice(0, 10);
+  if (!cleanDate || seller.hire_date > cleanDate) return false;
   return (
-    seller.effective_status === "activo" ||
-    (seller.effective_status === "salida_pendiente" &&
-      (!seller.inactive_effective_date ||
-        seller.inactive_effective_date > today()))
+    !seller.inactive_effective_date ||
+    cleanDate < seller.inactive_effective_date
   );
+}
+
+function isSellerActiveInPeriod(
+  seller: SellerRecord,
+  start: string,
+  end: string,
+) {
+  return (
+    seller.hire_date <= end &&
+    (!seller.inactive_effective_date ||
+      seller.inactive_effective_date > start)
+  );
+}
+
+function isSellerAvailable(seller: SellerRecord) {
+  return isSellerActiveOnDate(seller, today());
 }
 
 function sellerProbationAt(seller: SellerRecord, date: string) {
@@ -302,6 +325,33 @@ export function SalesDataHubV2({
     () => selectedSellers.filter(isSellerAvailable),
     [selectedSellers],
   );
+  const manualSellers = useMemo(
+    () =>
+      selectedSellers.filter((seller) =>
+        isSellerActiveOnDate(seller, manualDate),
+      ),
+    [manualDate, selectedSellers],
+  );
+  const announcedSellers = useMemo(
+    () =>
+      selectedSellers.filter((seller) =>
+        isSellerActiveOnDate(seller, announcedDate),
+      ),
+    [announcedDate, selectedSellers],
+  );
+  const importPeriodSellers = useMemo(
+    () =>
+      selectedSellers.filter((seller) =>
+        isSellerActiveInPeriod(seller, importStart, importEnd),
+      ),
+    [importEnd, importStart, selectedSellers],
+  );
+  const reportSellers = useMemo(() => {
+    const { start } = monthBounds(reportMonth);
+    return selectedSellers.filter((seller) =>
+      isSellerActiveInPeriod(seller, start, monthEnd(reportMonth)),
+    );
+  }, [reportMonth, selectedSellers]);
   const canManageTeam = [
     "Administrador",
     "Líder de departamento",
@@ -366,13 +416,13 @@ export function SalesDataHubV2({
   }, [reportMonth]);
 
   useEffect(() => {
-    if (!manualSellerId && activeSellers[0]) {
-      setManualSellerId(activeSellers[0].id);
+    if (!manualSellers.some((seller) => seller.id === manualSellerId)) {
+      setManualSellerId(manualSellers[0]?.id || "");
     }
-    if (!announcedSellerId && activeSellers[0]) {
-      setAnnouncedSellerId(activeSellers[0].id);
+    if (!announcedSellers.some((seller) => seller.id === announcedSellerId)) {
+      setAnnouncedSellerId(announcedSellers[0]?.id || "");
     }
-  }, [activeSellers, announcedSellerId, manualSellerId]);
+  }, [announcedSellerId, announcedSellers, manualSellerId, manualSellers]);
 
   async function saveSeller(event: React.FormEvent) {
     event.preventDefault();
@@ -541,13 +591,16 @@ export function SalesDataHubV2({
     () =>
       importRows.map((sale) => {
         const key = previewKey(sale);
-        const manuallySelected = selectedSellers.find(
+        const sellersForSaleDate = selectedSellers.filter((seller) =>
+          isSellerActiveOnDate(seller, sale.saleDate),
+        );
+        const manuallySelected = sellersForSaleDate.find(
           (seller) => seller.id === manualMatches[key],
         );
         const automatic = findBestSellerMatch(
           sale.sellerName,
           sale.sellerCode,
-          selectedSellers,
+          sellersForSaleDate,
         );
         const match: SellerMatch<SellerRecord> = manuallySelected
           ? {
@@ -787,7 +840,7 @@ export function SalesDataHubV2({
 
   async function saveManualSale(event: React.FormEvent) {
     event.preventDefault();
-    const seller = activeSellers.find((item) => item.id === manualSellerId);
+    const seller = manualSellers.find((item) => item.id === manualSellerId);
     if (!seller) return;
     setSaving(true);
     const supervisor = profiles.find(
@@ -834,7 +887,9 @@ export function SalesDataHubV2({
 
   async function saveAnnouncedSale(event: React.FormEvent) {
     event.preventDefault();
-    const seller = activeSellers.find((item) => item.id === announcedSellerId);
+    const seller = announcedSellers.find(
+      (item) => item.id === announcedSellerId,
+    );
     if (!seller) return;
     setSaving(true);
     const { error } = await supabase
@@ -923,12 +978,15 @@ export function SalesDataHubV2({
       if (sale.seller_id) {
         result.set(sale.id, sale.seller_id);
       } else {
+        const sellersForSaleDate = selectedSellers.filter((seller) =>
+          isSellerActiveOnDate(seller, sale.sale_date),
+        );
         result.set(
           sale.id,
           findBestSellerMatch(
             sale.seller_name,
             sale.seller_code,
-            selectedSellers,
+            sellersForSaleDate,
           ).seller?.id || null,
         );
       }
@@ -942,12 +1000,15 @@ export function SalesDataHubV2({
       if (sale.seller_id) {
         result.set(sale.id, sale.seller_id);
       } else {
+        const sellersForAnnouncedDate = selectedSellers.filter((seller) =>
+          isSellerActiveOnDate(seller, sale.announced_at),
+        );
         result.set(
           sale.id,
           findBestSellerMatch(
             sale.seller_name,
             sale.seller_code,
-            selectedSellers,
+            sellersForAnnouncedDate,
           ).seller?.id || null,
         );
       }
@@ -957,7 +1018,7 @@ export function SalesDataHubV2({
 
   const reportRows = useMemo(
     () =>
-      selectedSellers
+      reportSellers
         .map((seller) => {
           const sellerSales = filteredSales.filter(
             (sale) => saleAssignments.get(sale.id) === seller.id,
@@ -1001,7 +1062,7 @@ export function SalesDataHubV2({
       filteredAnnounced,
       filteredSales,
       saleAssignments,
-      selectedSellers,
+      reportSellers,
     ],
   );
 
@@ -1321,7 +1382,7 @@ export function SalesDataHubV2({
                     </p>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                     <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">
                       Tipo
                       <select
@@ -1334,6 +1395,24 @@ export function SalesDataHubV2({
                         <option value="posted">Ventas posteadas</option>
                         <option value="announced">Ventas anunciadas</option>
                       </select>
+                    </label>
+                    <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                      Mes de ventas
+                      <input
+                        type="month"
+                        value={importStart.slice(0, 7)}
+                        onChange={(event) => {
+                          const month = event.target.value;
+                          if (!month) return;
+                          setImportStart(`${month}-01`);
+                          setImportEnd(
+                            month === currentMonth() ? today() : monthEnd(month),
+                          );
+                          setImportRows([]);
+                          setManualMatches({});
+                        }}
+                        className="mt-2 w-full rounded-xl border border-purple-400/20 bg-[#111116] p-3 text-xs text-purple-200"
+                      />
                     </label>
                     <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600">
                       Desde
@@ -1472,7 +1551,7 @@ export function SalesDataHubV2({
                             className="rounded-lg border border-white/[.08] bg-[#111116] p-2 text-xs text-white"
                           >
                             <option value="">Conservar nombre original</option>
-                            {selectedSellers.map((seller) => (
+                            {importPeriodSellers.map((seller) => (
                               <option key={seller.id} value={seller.id}>
                                 {seller.full_name}
                               </option>
@@ -1642,7 +1721,19 @@ export function SalesDataHubV2({
                 className="mt-6 grid gap-4 sm:grid-cols-2"
               >
                 <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">
-                  Vendedor
+                  Mes de la venta
+                  <input
+                    required
+                    type="month"
+                    value={manualDate.slice(0, 7)}
+                    onChange={(event) =>
+                      setManualDate(`${event.target.value}-01`)
+                    }
+                    className="mt-2 w-full rounded-xl border border-purple-400/20 bg-[#111116] p-3 text-xs text-purple-200"
+                  />
+                </label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">
+                  Vendedor disponible en ese mes
                   <select
                     required
                     value={manualSellerId}
@@ -1651,7 +1742,7 @@ export function SalesDataHubV2({
                     }
                     className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
                   >
-                    {activeSellers.map((seller) => (
+                    {manualSellers.map((seller) => (
                       <option key={seller.id} value={seller.id}>
                         {seller.full_name}
                         {seller.is_on_probation ? " · EN PRUEBA" : ""}
@@ -1705,7 +1796,7 @@ export function SalesDataHubV2({
                   />
                 </label>
                 <button
-                  disabled={saving || !activeSellers.length}
+                  disabled={saving || !manualSellers.length}
                   className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 p-3 text-xs font-black sm:col-span-2 disabled:opacity-50"
                 >
                   <Save size={15} /> Guardar venta
@@ -1733,7 +1824,19 @@ export function SalesDataHubV2({
                   className="mt-5 space-y-4"
                 >
                   <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
-                    Vendedor
+                    Mes de la venta
+                    <input
+                      required
+                      type="month"
+                      value={announcedDate.slice(0, 7)}
+                      onChange={(event) =>
+                        setAnnouncedDate(`${event.target.value}-01`)
+                      }
+                      className="mt-2 w-full rounded-xl border border-purple-400/20 bg-[#111116] p-3 text-xs text-purple-200"
+                    />
+                  </label>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                    Vendedor disponible en ese mes
                     <select
                       required
                       value={announcedSellerId}
@@ -1742,7 +1845,7 @@ export function SalesDataHubV2({
                       }
                       className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
                     >
-                      {activeSellers.map((seller) => (
+                      {announcedSellers.map((seller) => (
                         <option key={seller.id} value={seller.id}>
                           {seller.full_name}
                         </option>
@@ -1797,7 +1900,7 @@ export function SalesDataHubV2({
                     />
                   </label>
                   <button
-                    disabled={saving || !activeSellers.length}
+                    disabled={saving || !announcedSellers.length}
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 p-3 text-xs font-black disabled:opacity-50"
                   >
                     <Megaphone size={15} /> Anunciar venta
@@ -1894,8 +1997,8 @@ export function SalesDataHubV2({
                     Reporte histórico por vendedor
                   </h3>
                   <p className="mt-1 text-[10px] text-zinc-600">
-                    Usa unidades acumuladas, coincidencia inteligente y período
-                    de prueba.
+                    Solo muestra vendedores que estuvieron registrados durante
+                    el mes seleccionado.
                   </p>
                 </div>
                 <input
