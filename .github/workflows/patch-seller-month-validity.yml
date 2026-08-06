@@ -1,0 +1,215 @@
+name: Patch seller month validity
+
+on:
+  push:
+    branches:
+      - fix/seller-month-validity
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/seller-month-validity
+      - name: Patch period-aware seller selection
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('components/sales-data-hub-v2.tsx')
+          text = path.read_text()
+
+          old = '''function isSellerAvailable(seller: SellerRecord) {
+  return (
+    seller.effective_status === "activo" ||
+    (seller.effective_status === "salida_pendiente" &&
+      (!seller.inactive_effective_date ||
+        seller.inactive_effective_date > today()))
+  );
+}
+'''
+          new = '''function isSellerActiveOnDate(seller: SellerRecord, date: string) {
+  const cleanDate = date.slice(0, 10);
+  if (!cleanDate || seller.hire_date > cleanDate) return false;
+  return !seller.inactive_effective_date || seller.inactive_effective_date > cleanDate;
+}
+
+function isSellerActiveInMonth(seller: SellerRecord, month: string) {
+  const { start, end } = monthBounds(month);
+  return seller.hire_date < end &&
+    (!seller.inactive_effective_date || seller.inactive_effective_date >= start);
+}
+
+function isSellerAvailable(seller: SellerRecord) {
+  return isSellerActiveOnDate(seller, today());
+}
+'''
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          old = '''  const activeSellers = useMemo(
+    () => selectedSellers.filter(isSellerAvailable),
+    [selectedSellers],
+  );
+'''
+          new = '''  const activeSellers = useMemo(
+    () => selectedSellers.filter(isSellerAvailable),
+    [selectedSellers],
+  );
+  const manualSellers = useMemo(
+    () => selectedSellers.filter((seller) => isSellerActiveOnDate(seller, manualDate)),
+    [manualDate, selectedSellers],
+  );
+  const announcedSellers = useMemo(
+    () => selectedSellers.filter((seller) => isSellerActiveOnDate(seller, announcedDate)),
+    [announcedDate, selectedSellers],
+  );
+  const importPeriodSellers = useMemo(
+    () => selectedSellers.filter((seller) =>
+      seller.hire_date <= importEnd &&
+      (!seller.inactive_effective_date || seller.inactive_effective_date >= importStart),
+    ),
+    [importEnd, importStart, selectedSellers],
+  );
+  const reportSellers = useMemo(
+    () => selectedSellers.filter((seller) => isSellerActiveInMonth(seller, reportMonth)),
+    [reportMonth, selectedSellers],
+  );
+'''
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          old = '''  useEffect(() => {
+    if (!manualSellerId && activeSellers[0]) {
+      setManualSellerId(activeSellers[0].id);
+    }
+    if (!announcedSellerId && activeSellers[0]) {
+      setAnnouncedSellerId(activeSellers[0].id);
+    }
+  }, [activeSellers, announcedSellerId, manualSellerId]);
+'''
+          new = '''  useEffect(() => {
+    if (!manualSellers.some((seller) => seller.id === manualSellerId)) {
+      setManualSellerId(manualSellers[0]?.id || "");
+    }
+    if (!announcedSellers.some((seller) => seller.id === announcedSellerId)) {
+      setAnnouncedSellerId(announcedSellers[0]?.id || "");
+    }
+  }, [announcedSellerId, announcedSellers, manualSellerId, manualSellers]);
+'''
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          text = text.replace('''        const manuallySelected = selectedSellers.find(
+          (seller) => seller.id === manualMatches[key],
+        );
+        const automatic = findBestSellerMatch(
+          sale.sellerName,
+          sale.sellerCode,
+          selectedSellers,
+        );
+''', '''        const sellersForSaleDate = selectedSellers.filter((seller) =>
+          isSellerActiveOnDate(seller, sale.saleDate),
+        );
+        const manuallySelected = sellersForSaleDate.find(
+          (seller) => seller.id === manualMatches[key],
+        );
+        const automatic = findBestSellerMatch(
+          sale.sellerName,
+          sale.sellerCode,
+          sellersForSaleDate,
+        );
+''', 1)
+
+          text = text.replace('[importRows, manualMatches, selectedSellers],', '[importRows, manualMatches, selectedSellers],', 1)
+
+          text = text.replace('''    const seller = activeSellers.find((item) => item.id === manualSellerId);
+''', '''    const seller = manualSellers.find((item) => item.id === manualSellerId);
+''', 1)
+          text = text.replace('''    const seller = activeSellers.find((item) => item.id === announcedSellerId);
+''', '''    const seller = announcedSellers.find((item) => item.id === announcedSellerId);
+''', 1)
+
+          text = text.replace('''      selectedSellers
+        .map((seller) => {
+''', '''      reportSellers
+        .map((seller) => {
+''', 1)
+          text = text.replace('''      selectedSellers,
+    ],
+  );
+''', '''      reportSellers,
+    ],
+  );
+''', 1)
+
+          text = text.replace('''                            {selectedSellers.map((seller) => (
+''', '''                            {importPeriodSellers.map((seller) => (
+''', 1)
+
+          text = text.replace('''                    {activeSellers.map((seller) => (
+''', '''                    {manualSellers.map((seller) => (
+''', 1)
+          text = text.replace('''                  disabled={saving || !activeSellers.length}
+''', '''                  disabled={saving || !manualSellers.length}
+''', 1)
+
+          text = text.replace('''                      {activeSellers.map((seller) => (
+''', '''                      {announcedSellers.map((seller) => (
+''', 1)
+          text = text.replace('''                    disabled={saving || !activeSellers.length}
+''', '''                    disabled={saving || !announcedSellers.length}
+''', 1)
+
+          text = text.replace('''                  Vendedor
+                  <select
+''', '''                  Mes de la venta
+                  <input
+                    required
+                    type="month"
+                    value={manualDate.slice(0, 7)}
+                    onChange={(event) => setManualDate(`${event.target.value}-01`)}
+                    className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-600 sm:col-span-2">
+                  Vendedor disponible en ese mes
+                  <select
+''', 1)
+
+          text = text.replace('''                  Vendedor
+                    <select
+''', '''                  Mes de la venta
+                    <input
+                      required
+                      type="month"
+                      value={announcedDate.slice(0, 7)}
+                      onChange={(event) => setAnnouncedDate(`${event.target.value}-01`)}
+                      className="mt-2 w-full rounded-xl border border-white/[.08] bg-[#111116] p-3 text-xs"
+                    />
+                  </label>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-zinc-600">
+                    Vendedor disponible en ese mes
+                    <select
+''', 1)
+
+          text = text.replace('''                    Usa unidades acumuladas, coincidencia inteligente y período
+                    de prueba.
+''', '''                    Solo muestra vendedores que estuvieron vigentes durante el mes seleccionado.
+''', 1)
+
+          path.write_text(text)
+          Path('.github/workflows/patch-seller-month-validity.yml').unlink()
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add components/sales-data-hub-v2.tsx .github/workflows/patch-seller-month-validity.yml
+          git commit -m "Filtrar vendedores por vigencia mensual"
+          git push origin HEAD:fix/seller-month-validity
