@@ -81,7 +81,7 @@ function monthIso(label: string) {
     diciembre: 12,
   };
   const normalized = label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const match = normalized.match(/^([a-z]+)\s+(\d{4})$/);
+  const match = normalized.match(/^([a-z]+)\s+(?:de\s+)?(\d{4})$/);
   if (!match || !months[match[1]]) {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
